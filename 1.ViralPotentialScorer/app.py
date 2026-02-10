@@ -5,7 +5,7 @@ import os
 import time
 import html
 from datetime import datetime, timezone
-
+import re, html
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
 
@@ -153,7 +153,7 @@ ol, ul {{
     color: #ffffff !important;
     white-space: pre-wrap;
     word-break: break-word;
-    line-height: 2.0;
+    line-height: 1.55;
 }}
 
 .footer-container {{
@@ -390,6 +390,7 @@ if st.button(btn_label):
         st.session_state[f"{APP_ID}_analysis"] = analysis
 
 # --- Result View ---
+
 if st.session_state.get(f"{APP_ID}_has_result"):
     analysis = st.session_state.get(f"{APP_ID}_analysis", "") or ""
     safe_analysis = html.escape(analysis)
@@ -409,3 +410,4 @@ st.markdown("""
   <span>جميع الحقوق محفوظة ©️ 2026 | AI Product Builder - Layan Khalil</span>
 </div>
 """, unsafe_allow_html=True)
+
