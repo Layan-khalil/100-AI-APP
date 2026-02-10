@@ -1,18 +1,32 @@
-
 import streamlit as st
 import uuid
 import hashlib
 from supabase import create_client, Client
 from google import genai
 from google.genai import types
+import time 
+from postgrest.exceptions import APIError
+
+# ✅ NEW (فقط لتفادي Error + retries)
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
 
 # ==============================
 # 0) إعدادات الصفحة أولاً
 # ==============================
 st.set_page_config(
-    page_title="Viral Scorer | مُحلّل الانتشار",
+    page_title="  مُحلّل الانتشار الفيروسي",
     layout="centered"
 )
+
+# ==============================
+# ✅ Language Switch
+# ==============================
+if "ui_lang" not in st.session_state:
+    st.session_state["ui_lang"] = "AR"
+
+lang_choice = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
+st.session_state["ui_lang"] = "EN" if lang_choice else "AR"
+IS_EN = (st.session_state["ui_lang"] == "EN")
 
 # ==============================
 # 1) تحميل الـ Secrets والاتصال
@@ -22,33 +36,56 @@ try:
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 except Exception:
-    st.error("⚠️ فشل في تحميل المفاتيح السرّية (Secrets). تأكدي من ضبطها في Streamlit Cloud.")
+    st.error("⚠️ فشل في تحميل المفاتيح السرّية (Secrets). تأكد من ضبطها في Streamlit Cloud.")
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai_client = genai.Client(api_key=GOOGLE_API_KEY)
 
 APP_ID = "viral-potential-scorer-v1"
+
+# ✅ استخدام نسخة مستقرة لضمان عدم حدوث Error 404
+MODEL_NAME = "gemini-1.5-flash"
+
 # =========================
 #  CSS & Responsive Styling
 # =========================
-st.markdown("""
+DIR = "ltr" if IS_EN else "rtl"
+ALIGN = "left" if IS_EN else "right"
+
+st.markdown(f"""
 <style>
 
-html, body, [data-testid="stAppViewContainer"], .main {
-    direction: rtl !important;
-    text-align: right !important;
-    font-family: "Cairo", sans-serif;
-}
+/* إخفاء شريط Streamlit العلوي */
+#MainMenu {{ visibility: hidden; }}
 
-/************  محتوى الصفحة الرئيسي  ************/
+/* إخفاء الفوتر الافتراضي */
+footer {{ visibility: hidden; }}
 
-.app-container {
+/* إخفاء أي عنصر فيه Created by / Avatar */
+div[data-testid="stToolbar"] {{ visibility: hidden; }}
+div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
+div[data-testid="stDecoration"] {{ visibility: hidden; }}
+
+/* إخفاء شريط الأسفل بالكامل (mobile + desktop) */
+div[class*="viewerBadge_container"] {{ display: none !important; }}
+div[class*="viewerBadge_link"] {{ display: none !important; }}
+div[class*="viewerBadge_text"] {{ display: none !important; }}
+
+/************ محتوى الصفحة الرئيسي  ************/
+.app-container {{
     max-width: 900px;
     margin: 0 auto;
     padding: 0 14px;
-}
-.stButton > button {
+}}
+
+html, body, [data-testid="stAppViewContainer"], .main {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    font-family: "Cairo", sans-serif;
+}}
+
+.stButton > button {{
     background-color: #e63946 !important;
     color: #ffffff !important;
     font-weight: 800;
@@ -59,65 +96,60 @@ html, body, [data-testid="stAppViewContainer"], .main {
     width: 100%;
     font-size: 17px;
     transition: 0.2s ease-in-out;
-}
+}}
 
-.stButton > button:hover {
+.stButton > button:hover {{
     background-color: #c82333 !important;
     transform: scale(1.01);
-}
+}}
 
-
-/************  العناوين  ************/
-
-h1,h2,h3,h4,h5,h6 {
-    direction: rtl !important;
-    text-align: right !important;
+/************ العناوين  ************/
+h1,h2,h3,h4,h5,h6 {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
     margin-right: 0;
-}
+}}
 
-/************  الفقرات والنصوص  ************/
-
-p, div {
-    direction: rtl !important;
-    text-align: right !important;
+/************ الفقرات والنصوص  ************/
+p, div {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
     word-break: break-word;
     line-height: 1.9;
-}
+}}
 
-/************  القوائم — لضمان ظهور الأرقام  ************/
-
-ol, ul {
-    direction: rtl !important;
-    text-align: right !important;
-    list-style-position: inside !important; /* يمنع قصّ الأرقام */
+/************ القوائم  ************/
+ol, ul {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    list-style-position: inside !important;
     padding-right: 0 !important;
     margin-right: 0 !important;
-}
+}}
 
-ol li, ul li {
-    margin: 8px 0;
-    padding-right: 6px;
-}
+/************ ✅ صندوق النتيجة  ************/
+.result-box {{
+    background: transparent !important;
+    border: 2px solid rgba(230,57,70,0.45);
+    border-radius: 18px;
+    padding: 16px 16px;
+    margin-top: 14px;
+}}
+.result-title {{
+    color: #ffffff !important;
+    font-weight: 900;
+    font-size: 18px;
+    margin-bottom: 10px;
+}}
+.result-text {{
+    color: #ffffff !important;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 2.0;
+}}
 
-/************  تحسين القراءة على الموبايل  ************/
-
-@media (max-width: 600px) {
-
-    .app-container {
-        padding: 0 10px;
-    }
-
-    ol, ul {
-        list-style-position: inside !important; /* ضروري لعدم قص الأرقام */
-    }
-
-    li {
-        line-height: 2.1;
-    }
-}
-
-/************  الفوتر  ************/
-.footer-container {
+/************ الفوتر  ************/
+.footer-container {{
     width: 100%;
     text-align: center;
     margin-top: 45px;
@@ -128,217 +160,168 @@ ol li, ul li {
     justify-content: center;
     gap: 6px;
     flex-wrap: wrap;
-}
-
-.footer-container .rtl-text {
-    direction: rtl;
-    unicode-bidi: plaintext;
-    font-weight: 600;
-}
-
-.footer-container .ltr-text {
-    direction: ltr;
-    unicode-bidi: plaintext;
-}
-
+    direction: rtl !important;
+}}
 </style>
 """, unsafe_allow_html=True)
-# ==============================
-# 3) دوال التتبع مع Supabase
-# ==============================
 
+# ==============================
+# 3) دوال التتبع
+# ==============================
 def get_session_visitor_id() -> str:
-    """توليد/استرجاع معرف الزائر داخل جلسة Streamlit."""
     if "visitor_id" not in st.session_state:
         st.session_state["visitor_id"] = str(uuid.uuid4())
     return st.session_state["visitor_id"]
 
-
 def track_visit():
-    """استدعاء دالة track_visit في Supabase لتسجيل الزيارة."""
     visitor_id = get_session_visitor_id()
     try:
-        supabase.rpc(
-            "track_visit",
-            {"p_app_id": APP_ID, "p_visitor_id": visitor_id},
-        ).execute()
-    except Exception as e:
-        # لا نكسر التطبيق إذا حدث خطأ
-        print(f"[track_visit] Error: {e}")
-
+        supabase.rpc("track_visit", {"p_app_id": APP_ID, "p_visitor_id": visitor_id}).execute()
+    except: pass
 
 def track_cta_event():
-    """استدعاء دالة increment_cta في Supabase عند الضغط على زر التحليل."""
     try:
         supabase.rpc("increment_cta", {"p_app_id": APP_ID}).execute()
-    except Exception as e:
-        print(f"[increment_cta] Error: {e}")
+    except: pass
 
-
-# تشغيل تتبع الزيارة فور تحميل الصفحة
 track_visit()
 
-# ==============================
-# 4) الكاش: ثبات النتيجة لنفس النص
-# ==============================
+def save_feedback_via_rpc(app_name, useful, missing_reason, problem_text, helpful_reason, must_use_text):
+    return supabase.rpc("submit_app_feedback", {
+        "p_app_name": app_name, "p_useful": useful, "p_missing_reason": missing_reason,
+        "p_problem_text": problem_text, "p_helpful_reason": helpful_reason, "p_must_use_text": must_use_text,
+    }).execute()
 
+# ==============================
+# 4) الكاش والتحليل (التعديل المطلوب هنا)
+# ==============================
 def get_content_hash(text: str) -> str:
-    """هاش ثابت للنص لضمان نفس النتيجة دائماً لنفس المحتوى."""
-    normalized = " ".join(text.strip().split())  # إزالة المسافات الزائدة
+    normalized = " ".join(text.strip().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
-
 def get_or_create_analysis(text: str) -> str:
-    """
-    1) يحاول قراءة التحليل من جدول viral_scores_cache
-    2) إذا لم يجده، يستدعي Gemini ثم يخزن النتيجة في الكاش
-    """
     content_hash = get_content_hash(text)
 
-    # 1) حاول قراءة الكاش
+    # 1) قراءة الكاش
     try:
-        res = (
-            supabase.table("viral_scores_cache")
-            .select("analysis_text")
-            .eq("app_id", APP_ID)
-            .eq("content_hash", content_hash)
-            .limit(1)
-            .execute()
-        )
-        if res.data and len(res.data) > 0:
-            cached_text = res.data[0]["analysis_text"]
-            if cached_text:
-                return cached_text
-    except Exception as e:
-        print(f"[cache read] Error: {e}")
+        res = supabase.table("viral_scores_cache").select("analysis_text").eq("app_id", APP_ID).eq("content_hash", content_hash).limit(1).execute()
+        if res.data: return res.data[0]["analysis_text"]
+    except: pass
 
-    # 2) لم نجد كاش → استدعاء Gemini
+    # 2) استدعاء Gemini مع رفع max_output_tokens لضمان عدم النقص
     gen_config = types.GenerateContentConfig(
-        temperature=0.0,
-        top_p=0.1,
-        top_k=1,
-        max_output_tokens=900,
+        temperature=0.7,
+        top_p=0.9,
+        max_output_tokens=4000,
     )
 
-    prompt = f"""
-أنت خبير محتوى فيروسي ومتخصص في نموذج STEPPS لجونا بيرجر.
+    if IS_EN:
+        prompt = f"Analyze using Jonah Berger's STEPPS (1-6). Score each /10 with 3-4 lines of detail. Do not show total %. Text:\n{text}"
+    else:
+        prompt = f"حلّل النص باستخدام عوامل STEPPS الستّة. أعطِ درجة من 10 لكل عامل مع شرح مفصل 3-4 أسطر. لا تظهر نسبة إجمالية. النص:\n{text}"
 
-المطلوب:
-- حلّل النص التالي بناءً على **ستة عوامل STEPPS** فقط:
-  1) Social Currency (العملة الاجتماعية)
-  2) Triggers (المحفّزات)
-  3) Emotion (المشاعر)
-  4) Public (الظهور العام)
-  5) Practical Value (القيمة العملية)
-  6) Stories (القصص)
+    MAX_RETRIES = 3
+    analysis_text = ""
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = genai_client.models.generate_content(model=MODEL_NAME, contents=prompt, config=gen_config)
+            if response.text:
+                analysis_text = response.text
+                break
+        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded):
+            time.sleep(2 * (attempt + 1))
+        except: break
 
-قواعد صارمة:
-- لا تحسب ولا تعرض "نتيجة نهائية" من 100 أو أي مجموع للأرقام.
-- اكتفِ فقط بإعطاء تقييم رقمي من 10 لكل عامل + شرح من سطرين إلى ثلاثة كحد أقصى.
-- اكتب المخرجات كلها بالعربية، ووضّح اسم كل عامل ثم الدرجة ثم الشرح.
-- رتّب العوامل من 1 إلى 6 بنفس الترتيب السابق.
-- لا تذكر أي معادلات حسابية ولا نسبة مئوية إجمالية.
-
-النص المراد تحليله:
-{text}
-"""
-
-    response = genai_client.models.generate_content(
-        model="gemini-2.0-flash-exp",
-        contents=prompt,
-        config=gen_config,
-    )
-
-    analysis_text = response.text or ""
-
-    # 3) تخزين النتيجة في الكاش (Best-effort)
-    try:
-        supabase.table("viral_scores_cache").insert(
-            {
-                "app_id": APP_ID,
-                "content_hash": content_hash,
-                "analysis_text": analysis_text,
-            }
-        ).execute()
-    except Exception as e:
-        print(f"[cache write] Error: {e}")
-
+    # 3) حفظ الكاش
+    if analysis_text.strip():
+        try:
+            supabase.table("viral_scores_cache").insert({"app_id": APP_ID, "content_hash": content_hash, "analysis_text": analysis_text}).execute()
+        except: pass
+    
     return analysis_text
-
 
 # ==============================
 # 5) واجهة المستخدم
 # ==============================
+if IS_EN:
+    st.title("🎯 Viral Potential Scorer")
+    with st.expander("💡 How does it work?"):
+        st.markdown("""
+This tool analyzes your text (post, tweet, video script...) using the 6 STEPPS factors:
+1. **Social Currency** | 2. **Triggers** | 3. **Emotion** | 4. **Public** | 5. **Practical Value** | 6. **Stories**
+""")
+else:
+    st.title("🎯 مُحلّل احتمالية انتشار المحتوى الفيروسي")
+    with st.expander("💡 كيف يعمل هذا المحلل؟"):
+        st.markdown("""
+هذه الأداة تحلل نصّك بناءً على ستة عوامل:
+1) **العملة الاجتماعية** | 2) **المحفّزات** | 3) **المشاعر** | 4) **الظهور العلني** | 5) **القيمة العملية** | 6) **القصص**
+""")
 
-st.title("🎯 مُحلّل احتمالية انتشار المحتوى الفيروسي")
+st.markdown("---")
 
-with st.expander("💡 كيف يعمل هذا المحلل؟"):
-    st.markdown(
-        """
-          هذه الأداة تحلل نصّك (منشور، تغريدة، سكريبت فيديو...) بناءً على ستة عوامل:
-        
-        1. **Social Currency – العملة الاجتماعية:**  
-           هل يجعل المحتوى الشخص الذي يشاركه يبدو أذكى، أعمق، أو أكثر خبرة؟
-        
-        2. **Triggers – المحفّزات:**  
-           هل يرتبط المحتوى بمواقف وأحداث متكرّرة في حياة الناس (روتين، أماكن، عبارات يومية)؟
-        
-        3. **Emotion – المشاعر:**  
-           إلى أي درجة يثير النص مشاعر قوية مثل الدهشة، الحماس، الفضول، الإلهام أو حتى الغضب البنّاء؟
-        
-        4. **Public – الظهور العلني:**  
-           هل من السهل رؤية هذا السلوك أو تقليده؟ هل المحتوى قابل للمحاكاة أمام الآخرين؟
-        
-        5. **Practical Value – القيمة العملية:**  
-           هل يقدم النص فائدة ملموسة، نصائح قابلة للتطبيق، أو يوفر وقتاً/مالاً/جهداً على المتلقي؟
-        
-        6. **Stories – القصص:**  
-           هل المعلومة مغلفة داخل قصة أو مثال حي يجعل الرسالة سهلة التذكّر والمشاركة؟
-        """,
-        unsafe_allow_html=False,
-    )
+# --- Testimonials Section (كما هي تماماً) ---
+st.markdown("""
+<style>
+.testimonial-wrapper, .testimonial-card, .testimonial-text, .testimonial-author, .testimonial-title {
+    direction: ltr !important; text-align: center !important;
+}
+.testimonial-title { text-align:center; font-size:20px; font-weight:800; margin: 10px 0 12px 0; }
+.testimonial-wrapper { display:flex; gap:14px; overflow-x:auto; padding: 8px 8px 14px 8px; scroll-snap-type:x mandatory; -webkit-overflow-scrolling: touch; }
+.testimonial-wrapper::-webkit-scrollbar { height:8px; }
+.testimonial-wrapper::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 99px; }
+.testimonial-card {
+    flex: 0 0 auto; width: 320px; max-width: 85vw; background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.14); border-left: 5px solid #e63946; border-radius: 14px;
+    padding: 16px; scroll-snap-align:center; height:auto !important;
+}
+.testimonial-text { color: rgba(255,255,255,0.92); font-size: 14px; line-height: 1.6; }
+.testimonial-author { margin-top:10px; font-weight:700; color: rgba(255,255,255,0.72); font-size: 13px; }
+</style>
+<div class="testimonial-title">💬 What users are saying</div>
+<div class="testimonial-wrapper">
+    <div class="testimonial-card"><div class="testimonial-text">I was looking for help improving how I write my posts, and this tool genuinely helped me. What makes it a must-use is how many people are moving toward content creation today — having guidance like this makes a real difference.</div><div class="testimonial-author">— Yousef Khalil</div></div>
+    <div class="testimonial-card"><div class="testimonial-text">The tool helped me understand what actually helps a post reach more people, especially because it analyzes viral factors with percentages and clear explanations.</div><div class="testimonial-author">— Sally Daibes</div></div>
+    <div class="testimonial-card"><div class="testimonial-text">Great tool. It helped me create a post that attracts advice and real experiences from others. I recommend creators and anyone interested in content to try it.</div><div class="testimonial-author">— Salem Khalil</div></div>
+    <div class="testimonial-card"><div class="testimonial-text">Love the initiative.</div><div class="testimonial-author">— Dany Kitishian</div></div>
+    <div class="testimonial-card"><div class="testimonial-text">Honestly impressive. I tested it on one of my posts and immediately saw where the tool could help improve performance. Well done.</div><div class="testimonial-author">— Salem Khalil</div></div>
+</div>
+""", unsafe_allow_html=True)
 
-post_text = st.text_area(
-    "✍️ أدخل نص المنشور / التغريدة / سكريبت الفيديو هنا:",
-    height=170,
-    placeholder="اكتب هنا النص الكامل الذي تريد قياس قابليته للانتشار (منشور، تغريدة، سكريبت فيديو، رسالة مبيعات...)",
-)
+# --- Inputs ---
+if IS_EN:
+    post_text = st.text_area("✍️ Paste your post / tweet / video script here:", height=220, placeholder="Write the full text...")
+    btn_label = "Analyze now 🚀"
+else:
+    post_text = st.text_area("✍️ أدخل نص المنشور / التغريدة هنا:", height=220, placeholder="اكتب النص الكامل هنا...")
+    btn_label = "تحليل الآن 🚀"
 
-if st.button("تحليل الآن 🚀"):
+if st.button(btn_label):
     if not post_text or len(post_text.strip()) < 20:
-        st.warning("الرجاء إدخال نص حقيقي لا يقل عن 20 حرفاً ليتم تحليله.")
+        st.warning("Please enter a real text." if IS_EN else "الرجاء إدخال نص حقيقي.")
     else:
-        # تسجيل الـ CTA في Supabase
         track_cta_event()
-
-        with st.spinner("⏳ جاري تحليل النص "):
+        with st.spinner("⏳ Analyzing..." if IS_EN else "⏳ جاري التحليل..."):
             analysis = get_or_create_analysis(post_text.strip())
+        st.session_state[f"{APP_ID}_has_result"] = True
+        st.session_state[f"{APP_ID}_analysis"] = analysis
 
-        if not analysis.strip():
-            st.error("لم يصلنا رد واضح من نموذج الذكاء الاصطناعي. حاولي مرة أخرى أو اختصري النص.")
-        else:
-            st.markdown(
-                """
-                <div class="result-box">
-                    <div class="result-title">📊 تحليل النص وفق عوامل STEPPS الستّة:</div>
-                    <div class="result-text">
-                """,
-                unsafe_allow_html=True,
-            )
-
-            # مخرجات التحليل (مع الحفاظ على الـ line breaks)
-            st.markdown(analysis, unsafe_allow_html=False)
-
-            st.markdown("</div></div>", unsafe_allow_html=True)
+# --- Result View ---
+if st.session_state.get(f"{APP_ID}_has_result"):
+    analysis = st.session_state.get(f"{APP_ID}_analysis", "")
+    if analysis.strip():
+        st.markdown(f"""
+        <div class="result-box">
+            <div class="result-title">{"📊 Analysis Results:" if IS_EN else "📊 نتائج التحليل:"}</div>
+            <div class="result-text">{analysis}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ==============================
 # 6) الفوتر
 # ==============================
 st.markdown("""
 <div class="footer-container">
-  <span class="rtl-text">جميع الحقوق محفوظة © 2026 |</span>
-  <span class="ltr-text">AI Product Builder - Layan Khalil</span>
+  <span>جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil</span>
 </div>
 """, unsafe_allow_html=True)
-
-
