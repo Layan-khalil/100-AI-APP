@@ -1,401 +1,646 @@
 import streamlit as st
+import os
+import json
+import time
+import hashlib
+from datetime import datetime, timezone
+from supabase import create_client, Client
+from postgrest.exceptions import APIError
 from google import genai
-from google.genai import types 
-from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded 
-import json 
-import time 
+from google.genai import types
+import re
 
-# =================================================================
-# 1. إعدادات الصفحة و RTL/Responsive CSS
-# =================================================================
-
+# =========================================================
+# 0) PAGE CONFIG
+# =========================================================
 st.set_page_config(
-    page_title=" محلل التفاعل المضاد",
+    page_title="محلّل التفاعل المضاد",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# قواعد CSS الشاملة لفرض RTL على كل عناصر Streamlit وإضافة تنسيق
-st.markdown("""
-<style>
-    /* ---------------------------------
-    *** قواعد CSS الشاملة لـ RTL ***
-    ----------------------------------- */
-    
-    html, body, .block-container, .stApp {
-        direction: rtl !important;
-    }
-    h1, h2, h3, h4, h5, h6, p, .stMarkdown, .stText { 
-        text-align: right !important;
-        direction: rtl !important;
-    }
-    textarea, input, .st-emotion-cache-1jm6hrl, .st-emotion-cache-1jm6hrl * { 
-        direction: rtl !important;
-        text-align: right !important;
-    }
-    
-    /* ---------------------------------
-    *** تنسيق زر الإجراء (Button Styling) ***
-    ----------------------------------- */
-    .stButton>button {
-        font-weight: bold;
-        width: 100%; 
-        direction: rtl !important;
-        background-color: #f75d5d; /* أحمر داكن للإيحاء بالتحليل السلبي */
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 10px 20px;
-        font-size: 1.1em;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 15px rgba(247, 93, 93, 0.4); 
-    }
-    .stButton>button:hover {
-        background-color: #e04b4b; 
-        box-shadow: 0 6px 20px rgba(247, 93, 93, 0.6); 
-        transform: translateY(-2px); 
-    }
+# =========================================================
+# LANGUAGE SWITCH
+# =========================================================
+if "ui_lang" not in st.session_state:
+    st.session_state["ui_lang"] = "AR"
 
-    /* تنسيق خاص لأقسام النتيجة */
-    .analysis-section {
-        background-color: #fff0f0; /* خلفية حمراء فاتحة */
-        padding: 20px;
-        border-radius: 12px;
-        margin-bottom: 25px;
-        border: 2px solid #f75d5d; /* حدود حمراء */
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    }
-    .analysis-section h3 {
-        color: #b30000; /* لون أحمر غامق جداً للعناوين الفرعية */
-        text-align: right !important;
-        border-bottom: 3px solid #f75d5d; 
-        padding-bottom: 5px;
-        margin-top: 0;
-        margin-bottom: 15px;
-        font-weight: 700;
-    }
-    .insight-item {
-        margin-bottom: 8px;
-        padding-right: 20px;
-        position: relative;
-        font-size: 1em;
-    }
-    .insight-item::before {
-        content: '🔴'; /* نقطة حمراء */
-        font-weight: bold;
-        display: inline-block;
-        width: 1em;
-        margin-right: -1em;
-        position: absolute;
-        right: 0;
-    }
-    .core-blind-spot {
-        font-size: 1.2em;
-        font-weight: bold;
-        color: #b30000;
-        background-color: #ffdddd;
-        padding: 10px;
-        border-radius: 6px;
-        border-right: 5px solid #b30000;
-    }
+lang_toggle = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
+st.session_state["ui_lang"] = "EN" if lang_toggle else "AR"
+IS_EN = (st.session_state["ui_lang"] == "EN")
 
-    /* حل مشكلة st.caption */
-    .rtl-caption {
-        direction: rtl !important;
-        text-align: right !important;
-        margin-top: -15px; 
-        font-size: 0.9em; 
-        color: rgba(49, 51, 63, 0.6); 
-    }
-    
-    /* ---------------------------------
-    *** تنسيق حقوق النشر (الـ Footer المُعزز) ***
-    ----------------------------------- */
-    
-    /* إخفاء التذييل الافتراضي لـ Streamlit للتحكم بالتذييل الخاص بنا */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+# =========================================================
+# SECRETS
+# =========================================================
+def get_secret(key: str):
+    return st.secrets.get(key) or os.environ.get(key)
 
-    /* التذييل الخاص بنا مع طبقة عليا لضمان ظهوره (z-index) */
-    .custom-footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        background-color: #f0f0f5; 
-        color: #888888;
-        text-align: center !important; 
-        padding: 10px;
-        font-size: 0.8em;
-        border-top: 1px solid #dddddd;
-        z-index: 1000; /* قيمة عالية لضمان الظهور فوق كل شيء */
-    }
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
+GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY")
 
-    /* ---------------------------------
-    *** إصلاح تنسيق الشرح داخل Expander ***
-    ----------------------------------- */
-    .st-emotion-cache-1ftn75r ul { /* UL element inside expander */
-        padding-right: 0px !important;
-        margin-right: 0px !important;
-        list-style-position: inside !important;
-    }
-    .st-emotion-cache-1ftn75r li {
-        text-align: right !important;
-        padding-right: 0px !important;
-        margin-right: 0px !important;
-    }
-    .expander-content {
-        text-align: right !important;
-        direction: rtl !important;
-    }
+if not all([SUPABASE_URL, SUPABASE_KEY, GOOGLE_API_KEY]):
+    st.error("⚠️ Missing secrets in Secrets / Env." if IS_EN else "⚠️ مفاتيح الربط ناقصة في Secrets أو Env.")
+    st.stop()
 
-</style>
-""", unsafe_allow_html=True)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+genai_client = genai.Client(api_key=GOOGLE_API_KEY)
 
+APP_ID = "5-reverse-engagement"
 
-# =================================================================
-# 2. تهيئة نموذج Gemini 
-# =================================================================
-client = None
-MAX_RETRIES = 3
-INITIAL_DELAY = 5
+MODEL_CANDIDATES = [
+    "gemini-2.0-flash-001",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro-001",
+]
 
-try:
-    # ⚠️ ملاحظة: يجب أن يكون مفتاح API متاحاً في بيئة Streamlit Secrets
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-    if not API_KEY:
-        st.warning("⚠️ لم يتم العثور على مفتاح GEMINI_API_KEY. يرجى إضافته إلى ملف secrets.toml.")
-    else:
-        client = genai.Client(api_key=API_KEY)
-except Exception as e:
-    st.error(f"خطأ غير متوقع أثناء التهيئة: {e}")
-    client = None
+def get_working_model():
+    if "working_model" in st.session_state:
+        return st.session_state["working_model"]
 
-# =================================================================
-# 3. دالة التحليل الرئيسية
-# =================================================================
-
-def analyze_reverse_engagement(raw_comments, context):
-    """
-    يحلل التعليقات السلبية لتحديد النقاط العمياء (Blind Spots) في الرسالة أو المنتج.
-    """
-    if not client:
-        return {"error": "فشل الاتصال بـ Gemini API."}
-        
-    system_prompt = (
-        "أنت محلل تفاعل مضاد (Reverse Engagement Analyst) صارم وغير متحيز. "
-        "مهمتك هي تجاهل الإيجابيات والتركيز حصريًا على التعليقات السلبية والأسئلة الصعبة "
-        "لتشخيص وتحديد نقاط الضعف والفهم الخاطئ (النقاط العمياء) في رسالة العميل أو منتجه. "
-        "يجب أن يكون الإخراج في تنسيق JSON حصراً يتبع المخطط المحدد بدقة."
-    )
-
-    prompt = f"""
-    إليك مجموعة من التعليقات السلبية/الأسئلة الصعبة التي تم جمعها من تفاعل الجمهور. 
-    التحليل يهدف لتحديد أين أخطأ المنتج أو الرسالة في التواصل.
-    
-    **السياق الإضافي (لمحة عن المنتج/الرسالة):** {context}
-
-    **التعليقات الخام (Raw Comments):**
-    ---
-    {raw_comments}
-    ---
-
-    **المهام:**
-    1.  **BlindSpotCategories:** تحديد 3 إلى 5 فئات رئيسية متكررة تسبب الإحباط أو سوء الفهم (مثل: التسعير غير واضح، صعوبة الاستخدام، وعد غير حقيقي، غياب خاصية معينة).
-    2.  **CoreBlindSpot:** تحديد نقطة الضعف الأكثر أهمية أو ضرراً على المدى الطويل.
-    3.  **ActionableInsights:** اقتراح 3-5 خطوات تنفيذية مباشرة لمعالجة نقطة الضعف الأساسية (CoreBlindSpot).
-    4.  **SentimentSummary:** تلخيص سريع لأقوى المشاعر السلبية الظاهرة في التعليقات (إحباط، شك، غضب، ارتباك).
-    """
-    
-    # مخطط JSON لضمان مخرجات منظمة
-    response_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "BlindSpotCategories": {
-                "type": "ARRAY",
-                "description": "3-5 فئات رئيسية للضعف أو سوء الفهم.",
-                "items": {"type": "STRING"}
-            },
-            "CoreBlindSpot": {
-                "type": "STRING",
-                "description": "أهم وأخطر نقطة ضعف تم اكتشافها."
-            },
-            "ActionableInsights": {
-                "type": "ARRAY",
-                "description": "3-5 خطوات تنفيذية لمعالجة المشكلة الأساسية.",
-                "items": {"type": "STRING"}
-            },
-            "SentimentSummary": {
-                "type": "STRING",
-                "description": "ملخص للمشاعر السلبية المسيطرة."
-            }
-        },
-        "propertyOrdering": ["BlindSpotCategories", "CoreBlindSpot", "ActionableInsights", "SentimentSummary"]
-    }
-
-    # حلقة إعادة المحاولة
-    for attempt in range(MAX_RETRIES):
+    for m in MODEL_CANDIDATES:
         try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    response_mime_type="application/json",
-                    response_schema=response_schema
-                )
+            genai_client.models.generate_content(
+                model=m,
+                contents="test",
+                config=types.GenerateContentConfig(max_output_tokens=1),
             )
-            return json.loads(response.text)
+            st.session_state["working_model"] = m
+            return m
+        except Exception:
+            continue
 
-        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
-            if attempt < MAX_RETRIES - 1:
-                delay = INITIAL_DELAY * (2 ** attempt) 
-                st.warning(f"⚠️ فشلت المحاولة {attempt + 1} بسبب ضغط الخادم. سيتم إعادة المحاولة بعد {delay} ثواني...")
-                time.sleep(delay)
-            else:
-                st.error(f"خطأ بالتوليد (API): فشلت جميع المحاولات. التفاصيل: {e}")
-                return {"error": str(e)}
-        except Exception as e:
-            st.error(f"خطأ غير متوقع: {e}")
-            return {"error": str(e)}
+    st.session_state["working_model"] = MODEL_CANDIDATES[0]
+    return MODEL_CANDIDATES[0]
 
-    return {"error": "فشل غير محدد في توليد المحتوى بعد محاولات متعددة."}
+# =========================================================
+# CACHE + CTA
+# =========================================================
+def make_content_hash(text: str):
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
+def cache_get(app_id, content_hash):
+    try:
+        res = (
+            supabase.table("viral_scores_cache")
+            .select("analysis_text")
+            .eq("app_id", app_id)
+            .eq("content_hash", content_hash)
+            .limit(1)
+            .execute()
+        )
+        return json.loads(res.data[0]["analysis_text"]) if res.data else None
+    except Exception:
+        return None
 
-# =================================================================
-# 4. واجهة المستخدم (Streamlit UI)
-# =================================================================
+def cache_set(app_id, content_hash, analysis):
+    try:
+        supabase.table("viral_scores_cache").upsert(
+            {
+                "app_id": app_id,
+                "content_hash": content_hash,
+                "analysis_text": json.dumps(analysis, ensure_ascii=False),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="app_id,content_hash",
+        ).execute()
+    except Exception:
+        pass
 
-st.title("🔎 محلل التفاعل المضاد (Reverse Engagement Analyst)")
+def track_cta_event(app_id):
+    try:
+        supabase.rpc("increment_cta", {"p_app_id": app_id}).execute()
+    except Exception:
+        pass
 
-# === 🌟 الشرح التفصيلي للهدف (المحتوى الجديد) 🌟 ===
-with st.expander("💡 شرح مفصل لهدف المنصة (النقطة العمياء)"):
-    # استخدام HTML/Markdown مع التنسيق اليدوي لإصلاح المحاذاة
-    st.markdown("""
-        <div class="expander-content">
-        
-        ### الهدف الأساسي: اكتشاف "النقاط العمياء" التي تمنع النمو
+# =========================================================
+# FEEDBACK (same style as previous tools)
+# =========================================================
+def save_feedback_via_rpc(
+    app_name: str,
+    useful: bool,
+    missing_reason: str | None,
+    problem_text: str | None,
+    helpful_reason: str | None,
+    must_use_text: str | None,
+):
+    return supabase.rpc(
+        "submit_app_feedback",
+        {
+            "p_app_name": app_name,
+            "p_useful": useful,
+            "p_missing_reason": missing_reason,
+            "p_problem_text": problem_text,
+            "p_helpful_reason": helpful_reason,
+            "p_must_use_text": must_use_text,
+        },
+    ).execute()
 
-        في عالم التسويق والمحتوى، يركز الجميع على الإعجابات (Likes) والمشاركات (Shares). هذه المقاييس رائعة للغرور، لكنها نادراً ما تخبركِ **بأين تكمن المشكلة الحقيقية.**
+# =========================================================
+# RTL / LTR CSS (STRICT)
+# =========================================================
+DIR = "ltr" if IS_EN else "rtl"
+ALIGN = "left" if IS_EN else "right"
 
-        #### ما هي "النقطة العمياء"؟
-        هي فجوة أو سوء فهم موجود بين ما **تظنين** أن جمهورك فهمه، وبين ما **فهموه بالفعل**.
+st.markdown(
+    f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
+/* إخفاء شريط Streamlit العلوي */
+#MainMenu {{ visibility: hidden; }}
 
-        **مثال:**
-        
-        <ul style="list-style-type: none; padding-right: 0; margin-right: 0;">
-            <li> • ما تظنينه (الإيجابيات): "منتجي رخيص وسهل الاستخدام!" (هذا ما سيؤدي إلى الإعجاب).</li>
-            <li> • ما يظنه الجمهور (السلبيات): "التسعير غالي، لأنني لم أفهم القيمة التي أحصل عليها مقارنةً بـ $100، ورسالتك لم تشرح الفرق." (هذا ما سيؤدي إلى تعليق سلبي/صعب).</li>
-        </ul>
+/* إخفاء الفوتر الافتراضي */
+footer {{ visibility: hidden; }}
 
-        #### دور التطبيق
-        تطبيق "محلل التفاعل المضاد" يتجاهل الإيجابيات، ويعمل كـ "منقب" عن هذا الذهب السلبي. إنه يقوم بثلاثة أمور رئيسية:
-        
-        <ul style="list-style-type: disc; padding-right: 15px; margin-right: 0;">
-            <li>التجميع والفرز: يجمع كل الشكاوى والأسئلة الصعبة في مكان واحد.</li>
-            <li>تشخيص الضعف: يحلل التعليقات ليرى ما هي الفئة الأكثر تكراراً التي تسبب الإحباط (هل هي التسعير؟ الجودة؟ سوء الفهم للرسالة؟).</li>
-            <li>التحويل إلى خطة: يحول هذا النقد السلبي إلى **خطوات تنفيذية (Actionable Insights)** يجب اتخاذها. بدلاً من أن تقولي "علينا أن نكون أفضل"، يقول لكِ: "عليكِ إضافة صفحة مبيعات تشرح بوضوح ميزة (X) لمواجهة سوء فهم التسعير."</li>
-        </ul>
+/* إخفاء أي عنصر فيه Created by / Avatar */
+div[data-testid="stToolbar"] {{ visibility: hidden; }}
+div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
+div[data-testid="stDecoration"] {{ visibility: hidden; }}
 
-        **باختصار:** الهدف هو تحويل النقد من مصدر إزعاج إلى **خارطة طريق واضحة جداً** لتحسين المنتج، وتعديل الرسالة التسويقية، وبالتالي ضمان نمو حقيقي ومستدام.
-        
-        </div>
-    """, unsafe_allow_html=True)
+/* إخفاء شريط الأسفل بالكامل (mobile + desktop) */
+div[class*="viewerBadge_container"] {{ display: none !important; }}
+div[class*="viewerBadge_link"] {{ display: none !important; }}
+div[class*="viewerBadge_text"] {{ display: none !important; }}
 
+html, body, [data-testid="stAppViewContainer"], .main {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    font-family: 'Cairo', sans-serif !important;
+}}
+
+* {{
+    box-sizing: border-box;
+}}
+
+h1, h2, h3, h4, h5, h6,
+p, div, span, li,
+[data-testid="stMarkdownContainer"] {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    unicode-bidi: plaintext !important;
+    line-height: 1.75 !important;
+}}
+
+[data-testid="stExpander"] * {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    unicode-bidi: plaintext !important;
+}}
+
+[data-testid="stTextInput"] label,
+[data-testid="stTextArea"] label,
+[data-testid="stRadio"] label,
+[data-testid="stCaptionContainer"] {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    unicode-bidi: plaintext !important;
+}}
+
+.stButton > button {{
+    background-color: #f75d5d !important;
+    color: white !important;
+    font-weight: 800 !important;
+    border-radius: 14px !important;
+    width: 100% !important;
+    height: 3.3em !important;
+    border: none !important;
+}}
+
+.stButton > button:hover {{
+    filter: brightness(0.95);
+    transform: scale(1.01);
+}}
+
+hr {{
+    margin: 18px 0 !important;
+}}
+
+/* Footer always RTL like your previous tools */
+.footer-container {{
+    width: 100%;
+    text-align: center;
+    margin-top: 45px;
+    padding-top: 18px;
+    border-top: 1px solid #666;
+    font-size: 13px;
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    direction: rtl !important;
+}}
+.footer-container, .footer-container * {{
+    direction: rtl !important;
+    text-align: center !important;
+}}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# HEADER + CAPTION
+# =========================================================
+if IS_EN:
+    st.title("🔎 Reverse Engagement Analyzer")
+    st.caption("Turn negative comments into a clear plan to fix perception and improve your message.")
+else:
+    st.title("🔎 محلل التفاعل المضاد")
+    st.caption("حوّل التعليقات السلبية إلى خطة واضحة لتصحيح الانطباع وتحسين رسالتك.")
+
+# =========================================================
+# EXPANDER (short + clear + example)
+# =========================================================
+with st.expander("What is this tool?" if IS_EN else "ما هي هذه الأداة؟", expanded=True):
+    if IS_EN:
+        st.markdown("""
+This tool helps you understand negative comments instead of ignoring them.
+
+Sometimes people leave critical feedback on:
+- Your posts or videos
+- Your product or service
+- A campaign or a new idea
+
+Behind these comments, there is often a real concern or something unclear to your audience.
+
+This tool analyzes negative feedback to help you discover:
+- What is actually frustrating your audience
+- Where the blind spots exist in your message or product
+- What can be improved in a practical way
+
+Designed for creators, founders, marketers, and anyone who wants to turn criticism into improvement instead of taking it as an attack.
+
+The goal is not to judge your content,
+but to help you see things from your audience’s perspective and make better decisions.
+""")
+    else:
+        st.markdown("""
+هذه الأداة تساعدك على فهم التعليقات السلبية بدل تجاهلها.
+
+أحياناً الناس تكتب تعليقات ناقدة على:
+- منشوراتك أو فيديوهاتك
+- منتجك أو خدمتك
+- إعلان أو فكرة جديدة
+
+لكن خلف هذه التعليقات يوجد غالباً سبب حقيقي أو نقطة غير واضحة للجمهور.
+
+هذه الأداة تحلل التعليقات السلبية وتساعدك على اكتشاف:
+- ما الذي يزعج الجمهور فعلاً
+- أين توجد النقاط العمياء في الرسالة أو المنتج
+- ماذا يمكن تحسينه بشكل عملي
+
+مقدمة لصنّاع المحتوى، أصحاب المشاريع، المسوّقين، وأي شخص يريد تحويل النقد إلى فرصة تحسين بدلاً من اعتباره هجوماً.
+
+الهدف ليس الحكم على المحتوى،
+بل مساعدتك على رؤية الصورة من زاوية الجمهور وبناء قرارات أفضل.
+""")
+
+# =========================================================
+# TESTIMONIALS (LTR always)  ✅ FIXED: خارج الـexpander + بدون كسر نصوص بايثون
+# =========================================================
 st.markdown("---")
 
-# مساعدة المستخدم بمثال
-example_comments = """
-السعر مبالغ فيه جداً مقابل الميزات المتاحة. المنافس يقدم نفس الخصائص بنصف المبلغ.
-لماذا لا يوجد دعم فني مباشر؟ الإيميلات لا تكفي لحل مشاكلي الفورية.
-لقد وعدتم بأن المنتج يعمل على جميع الأجهزة القديمة، لكنه لا يعمل على جهازي اللوحي. هذا إعلان مضلل!
-الواجهة معقدة جداً، أحتاج 3 خطوات لأصل إلى إعداد بسيط. يجب تبسيط العملية.
-أين أجد سياسة الاسترجاع؟ لم يتم ذكرها بوضوح في صفحة الشراء.
+TESTIMONIALS_HTML = r"""
+<style>
+.testimonial-title{
+  text-align:center;
+  font-size:20px;
+  font-weight:800;
+  margin: 10px 0 12px 0;
+  direction:ltr !important;
+  unicode-bidi: plaintext !important;
+  color: inherit !important; /* يشتغل مع light/dark */
+}
+.testimonial-wrapper{
+  display:flex;
+  gap:14px;
+  overflow-x:auto;
+  padding: 8px 8px 14px 8px;
+  scroll-snap-type:x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+.testimonial-wrapper::-webkit-scrollbar{height:8px;}
+.testimonial-wrapper::-webkit-scrollbar-thumb{
+  background: rgba(0,0,0,0.18);
+  border-radius: 99px;
+}
+
+/* ✅ توحيد طول الكروت + مساحة أكبر للكلام */
+.testimonial-card{
+  flex: 0 0 auto;
+  width: 320px;
+  max-width: 86vw;
+  background: #0e1117;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-left: 5px solid #e63946;
+  border-radius: 14px;
+  padding: 16px;
+  scroll-snap-align:center;
+
+  direction:ltr !important;
+  text-align:center !important;
+  unicode-bidi: plaintext !important;
+
+  min-height: 220px; /* ✅ نفس الطول لكل الكروت */
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+}
+
+.testimonial-text{
+  color: rgba(255,255,255,0.92) !important; /* ✅ واضح حتى لو الثيم فاتح */
+  font-size: 13px;
+  line-height: 1.55;
+  margin:0 !important;
+  padding:0 !important;
+
+  direction:ltr !important;
+  text-align:center !important;
+  unicode-bidi: plaintext !important;
+}
+
+.testimonial-author{
+  margin-top:12px;
+  font-weight:700;
+  color: rgba(255,255,255,0.75) !important;
+  font-size: 13px;
+
+  direction:ltr !important;
+  text-align:center !important;
+  unicode-bidi: plaintext !important;
+}
+</style>
+
+<div class="testimonial-title">💬 What users are saying</div>
+
+<div class="testimonial-wrapper">
+  <div class="testimonial-card">
+    <div class="testimonial-text">
+      I tested the tool on a TikTok product, and the analysis was better than expected.
+    </div>
+    <div class="testimonial-author">— Saleem Khalil</div>
+  </div>
+
+  <div class="testimonial-card">
+    <div class="testimonial-text">
+      Love this idea. Most tools ignore negative comments or label them as ‘hate’, but this actually helps understand why people react that way.
+      Super useful for creators who want to improve instead of getting defensive.
+    </div>
+    <div class="testimonial-author">— Rohit Gautam</div>
+  </div>
+</div>
 """
+st.markdown(TESTIMONIALS_HTML, unsafe_allow_html=True)
 
-context = st.text_input(
-    "لمحة عن المنتج/الرسالة (السياق):", 
-    placeholder="مثلاً: نحن نقدم برنامج اشتراك شهري لتحسين الإنتاجية.",
-    key="context_input"
-)
-st.markdown('<div class="rtl-caption">قدم وصفاً مختصراً للمنتج أو الخدمة لضمان تحليل أدق.</div>', unsafe_allow_html=True)
+# =========================================================
+# INPUTS + PLACEHOLDERS
+# =========================================================
+if IS_EN:
+    ctx_val = st.text_input(
+        "📌 What received the negative comments?",
+        placeholder="Example: A video explaining how to start a business with no capital",
+    )
+    st.caption("Briefly describe the product, post, message, or idea people reacted to.")
+    comm_val = st.text_area(
+        "🧾 Paste negative comments here",
+        height=200,
+        placeholder="Example:\n- This feels generic.\n- I don’t trust this.\n- Too salesy.\n- What’s the real value?\n(You can paste many comments.)",
+    )
+    btn_label = "🚨 Analyze Blind Spots"
+else:
+    ctx_val = st.text_input(
+        "📌 ما هو الشيء الذي حصلت عليه التعليقات السلبية؟",
+        placeholder=" مثال: فيديو نشرته على الانستغرام أشرح فيه للجمهور كيف تبدأ مشروع بدون رأس مال  ",
+    )
+    st.caption("اكتب بإختصار: هل في فكرة، إعلان، منتج، فيديو، أو بوست")
 
-raw_comments = st.text_area(
-    "التعليقات السلبية/الأسئلة الصعبة (الصقها هنا):", 
-    placeholder=example_comments,
-    height=300,
-    key="comments_input"
-)
-st.markdown('<div class="rtl-caption">انسخ والصق مجموعة من التعليقات أو الملاحظات التي تشير إلى شكاوى، ارتباك، أو أسئلة تحدي.</div>', unsafe_allow_html=True)
+    comm_val = st.text_area(
+        "🧾 الصق التعليقات السلبية هنا",
+        height=200,
+        placeholder="مثال:\n- الكلام عام.\n- ما حسّيت بمصداقية.\n- تسويق زيادة.\n- شو القيمة الحقيقية؟\n(بإمكانك تلصقي عدة تعليقات.)",
+    )
+    btn_label = "🚨 تحليل النقاط العمياء"
 
-if st.button("🚨 تحليل النقاط العمياء الآن", width='stretch'):
-    if not raw_comments:
-        st.warning("الرجاء لصق التعليقات لبدء التحليل.")
-        st.stop()
-    
-    with st.spinner("جاري تحليل التفاعل المضاد وتشخيص نقاط الضعف..."):
-        analysis_result = analyze_reverse_engagement(raw_comments, context)
+# =========================================================
+# MODEL LOGIC (unchanged)
+# =========================================================
+def clean_json_text(text):
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    return match.group(0) if match else text
 
-    if analysis_result and "error" in analysis_result:
-        st.error(f"فشل التحليل: {analysis_result['error']}")
-    
-    elif analysis_result:
-        st.markdown("---")
-        st.markdown("## 🛑 نتائج تحليل التفاعل المضاد")
+def analyze_reverse_engagement(raw_comments, context, lang_name):
+    current_model = get_working_model()
+    prompt = f"""
+Analyze the following negative comments to identify blind spots.
 
-        # ----------------------------------------------------
-        # 1. أهم نقطة عمياء
-        # ----------------------------------------------------
-        with st.container():
-            st.markdown('<div class="analysis-section">', unsafe_allow_html=True)
-            st.markdown("<h3>🎯 Core Blind Spot (أخطر نقطة ضعف)</h3>", unsafe_allow_html=True)
-            st.markdown(f'<p class="core-blind-spot"> {analysis_result.get("CoreBlindSpot", "غير محدد")} </p>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+Context: {context}
+Comments: {raw_comments}
 
-        col_cat, col_sum = st.columns(2)
-        
-        # ----------------------------------------------------
-        # 2. فئات الضعف الرئيسية
-        # ----------------------------------------------------
-        with col_cat:
-            with st.container():
-                st.markdown('<div class="analysis-section" style="background-color:#ffebeb; border: 2px solid #ff9999;">', unsafe_allow_html=True)
-                st.markdown("<h3>🔍 Blind Spot Categories (فئات الضعف المتكررة)</h3>", unsafe_allow_html=True)
-                categories = analysis_result.get("BlindSpotCategories", [])
-                if categories:
-                    for item in categories:
-                         st.markdown(f'<p class="insight-item" style="color: #660000; font-weight: 500;"> {item} </p>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-        
-        # ----------------------------------------------------
-        # 3. ملخص المشاعر
-        # ----------------------------------------------------
-        with col_sum:
-            with st.container():
-                st.markdown('<div class="analysis-section" style="background-color:#ffebeb; border: 2px solid #ff9999;">', unsafe_allow_html=True)
-                st.markdown("<h3>💔 Sentiment Summary (ملخص المشاعر السلبية)</h3>", unsafe_allow_html=True)
-                summary = analysis_result.get("SentimentSummary", "غير محدد")
-                st.info(summary)
-                st.markdown('</div>', unsafe_allow_html=True)
+Return ONLY JSON in {lang_name}:
+{{
+  "BlindSpotCategories": ["category 1", "category 2"],
+  "CoreBlindSpot": "The most dangerous blind spot",
+  "ActionableInsights": ["step 1", "step 2", "step 3"],
+  "SentimentSummary": "Summary of overall negative sentiment"
+}}
+* Note: Provide deep, non-shortened analysis.
+"""
+    cfg = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        temperature=0.5,
+        max_output_tokens=4000,
+    )
+    resp = genai_client.models.generate_content(model=current_model, contents=prompt, config=cfg)
+    return json.loads(clean_json_text(resp.text))
 
-        # ----------------------------------------------------
-        # 4. خطوات تنفيذية
-        # ----------------------------------------------------
-        with st.container():
-            st.markdown('<div class="analysis-section">', unsafe_allow_html=True)
-            st.markdown("<h3>🛠️ Actionable Insights (خطوات تنفيذية فورية)</h3>", unsafe_allow_html=True)
-            insights = analysis_result.get("ActionableInsights", [])
-            if insights:
-                for idx, item in enumerate(insights):
-                    st.markdown(f'**{idx + 1}.** {item}')
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-# =================================================================
-# 5. التذييل (Footer)
-# =================================================================
-# يتم حقن التذييل في HTML بعد عرض كل محتوى التطبيق
+# =========================================================
+# RUN
+# =========================================================
+if st.button(btn_label):
+    if not comm_val.strip():
+        st.warning("Please add comments." if IS_EN else "يرجى إضافة التعليقات.")
+    else:
+        track_cta_event(APP_ID)
+
+        c_hash = make_content_hash(f"{ctx_val}{comm_val}{st.session_state['ui_lang']}")
+        cached = cache_get(APP_ID, c_hash)
+
+        if cached:
+            res = cached
+        else:
+            with st.spinner("Analyzing..." if IS_EN else "جاري التحليل..."):
+                l_name = "English" if IS_EN else "Arabic"
+                res = analyze_reverse_engagement(comm_val, ctx_val, l_name)
+                if "error" not in res:
+                    cache_set(APP_ID, c_hash, res)
+
+        if "error" in res:
+            st.error(res["error"])
+        else:
+            st.session_state["reverse_res"] = res
+            st.session_state["has_result"] = True
+
+# =========================================================
+# RESULTS (RTL/LTR enforced by CSS)
+# =========================================================
+if st.session_state.get("has_result") and "reverse_res" in st.session_state:
+    data = st.session_state["reverse_res"]
+
+    st.markdown("---")
+
+    if IS_EN:
+        st.header("📊 Results")
+        st.markdown("### 🎯 Critical Blind Spot")
+        st.warning(data.get("CoreBlindSpot", "—"))
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### 🔴 Criticism Categories")
+            cats = data.get("BlindSpotCategories", [])
+            if isinstance(cats, list) and cats:
+                for cat in cats:
+                    st.markdown(f"- {cat}")
+            else:
+                st.markdown("—")
+
+        with col2:
+            st.markdown("#### 💔 Sentiment Summary")
+            st.info(data.get("SentimentSummary", "—"))
+
+        st.markdown("### 🛠️ Action Steps")
+        steps = data.get("ActionableInsights", [])
+        if isinstance(steps, list) and steps:
+            for i, step in enumerate(steps, 1):
+                st.markdown(f"{i}. **{step}**")
+        else:
+            st.markdown("—")
+
+    else:
+        st.header("📊 نتائج التحليل")
+        st.markdown("### 🎯 أخطر نقطة عمياء")
+        st.warning(data.get("CoreBlindSpot", "—"))
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### 🔴 فئات النقد")
+            cats = data.get("BlindSpotCategories", [])
+            if isinstance(cats, list) and cats:
+                for cat in cats:
+                    st.markdown(f"- {cat}")
+            else:
+                st.markdown("—")
+
+        with col2:
+            st.markdown("#### 💔 ملخص المشاعر")
+            st.info(data.get("SentimentSummary", "—"))
+
+        st.markdown("### 🛠️ خطوات إصلاح فورية")
+        steps = data.get("ActionableInsights", [])
+        if isinstance(steps, list) and steps:
+            for i, step in enumerate(steps, 1):
+                st.markdown(f"{i}. **{step}**")
+        else:
+            st.markdown("—")
+
+    # =========================================================
+    # FEEDBACK (same as previous tools)
+    # =========================================================
+    st.divider()
+    st.subheader("📝 Feedback" if IS_EN else "📝 ساعدنا نطوّر الأداة بناءً على رأيك")
+
+    feedback_choice = st.radio(
+        "How was your experience?" if IS_EN else "كيف كانت تجربتك مع هذه الأداة؟",
+        ("This tool was useful for me", "This tool was not useful") if IS_EN
+        else ("هذه الأداة كانت مفيدة بالنسبة لي", "هذه الأداة لم تكن مفيدة"),
+        key=f"{APP_ID}_feedback_choice",
+    )
+
+    useful = feedback_choice == ("This tool was useful for me" if IS_EN else "هذه الأداة كانت مفيدة بالنسبة لي")
+
+    missing_reason = None
+    if not useful:
+        missing_reason = st.text_input(
+            "What was missing? (one sentence)" if IS_EN else "ما الذي كان ناقصاً؟ (جملة واحدة)",
+            max_chars=200,
+            key=f"{APP_ID}_missing_reason",
+            placeholder="Example: needs clearer steps / export option / more detailed categories" if IS_EN
+            else "مثال: بدي خطوات أوضح / خيار تصدير / تفاصيل أكثر",
+        )
+
+    with st.expander("Quick feedback (3 questions)" if IS_EN else "فيدباك سريع (3 أسئلة)", expanded=False):
+        problem_text = st.text_area(
+            "1) What problem were you trying to solve?"
+            if IS_EN
+            else "1) ما المشكلة التي كنت تحاول حلّها؟",
+            max_chars=280,
+            key=f"{APP_ID}_problem_text",
+            placeholder="Example: I want to understand why people react negatively" if IS_EN
+            else "مثال: بدي أفهم ليش الناس بتنتقد / شو نقطة الضعف",
+        )
+
+        helpful_reason = st.text_area(
+            "2) Did it help? Why yes/no?"
+            if IS_EN
+            else "2) هل ساعدتك الأداة؟ لماذا نعم/لا؟",
+            max_chars=280,
+            key=f"{APP_ID}_helpful_reason",
+            placeholder="Example: It pinpointed the main issue + gave steps" if IS_EN
+            else "مثال: حددت المشكلة الأساسية + أعطتني خطوات",
+        )
+
+        must_use_text = st.text_area(
+            "3) What would make this a must-use tool for you?"
+            if IS_EN
+            else "3) ما الذي سيجعل هذه الأداة «لازم تُستخدم» بالنسبة لك؟",
+            max_chars=280,
+            key=f"{APP_ID}_must_use_text",
+            placeholder="Example: export PDF / save history / compare versions" if IS_EN
+            else "مثال: تصدير PDF / حفظ النتائج / مقارنة نسخ",
+        )
+
+        submit_feedback = st.button("✅ Submit feedback" if IS_EN else "✅ إرسال الفيدباك", key=f"{APP_ID}_submit_feedback")
+
+        if submit_feedback:
+            has_any_text = any(
+                [
+                    (missing_reason or "").strip(),
+                    (problem_text or "").strip(),
+                    (helpful_reason or "").strip(),
+                    (must_use_text or "").strip(),
+                ]
+            )
+
+            if (not useful) and (not has_any_text):
+                st.warning("Write at least one line." if IS_EN else "اكتب سطر واحد على الأقل 🙏")
+            else:
+                try:
+                    save_feedback_via_rpc(
+                        app_name=APP_ID,
+                        useful=useful,
+                        missing_reason=(missing_reason or "").strip() or None,
+                        problem_text=(problem_text or "").strip() or None,
+                        helpful_reason=(helpful_reason or "").strip() or None,
+                        must_use_text=(must_use_text or "").strip() or None,
+                    )
+                    st.success("Feedback saved ✅" if IS_EN else "تم حفظ الفيدباك ✅ شكرًا لك!")
+                except APIError as e:
+                    st.error("Supabase APIError:" if IS_EN else "خطأ من Supabase:")
+                    try:
+                        st.json(e.args[0])
+                    except Exception:
+                        st.write(str(e))
+                except Exception as e:
+                    st.exception(e)
+
+# =========================================================
+# FOOTER (HTML direct)
+# =========================================================
 st.markdown(
-    '<div class="custom-footer">جميع الحقوق محفوظة © 2026 | AI Product Creator - Layan Khalil</div>', 
-    unsafe_allow_html=True
+    """
+<div class="footer-container">
+  <span>جميع الحقوق محفوظة © 2026 |</span>
+  <span>AI Product Builder - Layan Khalil</span>
+</div>
+""",
+    unsafe_allow_html=True,
 )
