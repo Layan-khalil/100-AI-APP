@@ -56,10 +56,14 @@ This tool takes one original post and rewrites it into 5 versions, each matching
 - Built-in CTA + hashtags aligned with each platform
 
 **Example input:**
-"I launched a 7-day language learning challenge. I want people to stay consistent and share their progress."
+"AI isn’t just changing tools — it’s changing how we think, work, and create."
 
 **What happens:**
-You’ll get 5 rewritten posts with different tones, CTAs, and hashtag density — ready to copy/paste.
+TikTok / Instagram tone:  
+"AI just changed the way I work… and no one is talking about this."
+
+X (Twitter) tone:  
+"AI isn’t replacing people. It’s replacing workflows."
 """
         if IS_EN
         else
@@ -76,11 +80,16 @@ You’ll get 5 rewritten posts with different tones, CTAs, and hashtag density �
 - CTA + هاشتاغات مناسبة لكل منصة
 
 **مثال مدخلات:**
-"أطلقت تحدي 7 أيام لتعلم لغة جديدة. بدي الناس تلتزم وتشارك تقدمها."
+"الذكاء الاصطناعي يغيّر كل شيء."
 
-**ماذا ستحصل؟**
-5 نسخ جاهزة للنشر، كل نسخة بنبرة مختلفة + CTA + هاشتاغات، للنسخ واللصق مباشرة.
-"""
+**المخرجات**
+
+نبرة لينكدإن:  
+"الذكاء الاصطناعي لا يغيّر الأدوات فقط، بل يغيّر طريقة عملنا وتفكيرنا وصناعة المحتوى."
+نبرة إنستغرام / تيك توك:  
+"الذكاء الاصطناعي غيّر طريقة شغلي بالكامل… والغريب إن قليل ناس منتبهة لهذا الشي."
+نبرة X (تويتر):  
+"الذكاء الاصطناعي لا يستبدل الأشخاص… بل يستبدل طريقة العمل.""""
     ),
     "input_label": "Original post / idea" if IS_EN else "المنشور الأصلي أو الفكرة التي تريد تكييفها",
     "input_ph": "Write your content here..." if IS_EN else "اكتب هنا المحتوى الذي تريد تحويله...",
@@ -419,7 +428,7 @@ Important:
 # 10) UI
 # =================================================================
 st.title(TXT["title"])
-st.subheader(TXT["sub"])
+st.caption(TXT["sub"])
 
 with st.expander(TXT["exp_title"], expanded=True):
     st.markdown(TXT["exp_body"])
@@ -571,7 +580,7 @@ if isinstance(data, dict) and data:
 st.markdown(
     """
 <footer class="custom-footer">
-  جميع الحقوق محفوظة ©️ 2026 | AI Product Builder - Layan Khalil
+  جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil
 </footer>
 """,
     unsafe_allow_html=True,
