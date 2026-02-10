@@ -392,6 +392,7 @@ if st.button(btn_label):
 # --- Result View ---
 
 if st.session_state.get(f"{APP_ID}_has_result"):
+    analysis_clean = re.sub(r"\n{3,}", "\n\n", analysis.strip())  # يمنع فراغات كبيرة
     analysis = st.session_state.get(f"{APP_ID}_analysis", "") or ""
     safe_analysis = html.escape(analysis)
 
@@ -410,4 +411,5 @@ st.markdown("""
   <span>جميع الحقوق محفوظة ©️ 2026 | AI Product Builder - Layan Khalil</span>
 </div>
 """, unsafe_allow_html=True)
+
 
