@@ -200,46 +200,114 @@ def get_content_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 def get_or_create_analysis(text: str) -> str:
+    """
+    1) يحاول قراءة التحليل من جدول viral_scores_cache
+    2) إذا لم يجده، يستدعي Gemini ثم يخزن النتيجة في الكاش
+    """
     content_hash = get_content_hash(text)
 
-    # 1) قراءة الكاش
+    # 1) حاول قراءة الكاش
     try:
-        res = supabase.table("viral_scores_cache").select("analysis_text").eq("app_id", APP_ID).eq("content_hash", content_hash).limit(1).execute()
-        if res.data: return res.data[0]["analysis_text"]
-    except: pass
+        res = (
+            supabase.table("viral_scores_cache")
+            .select("analysis_text")
+            .eq("app_id", APP_ID)
+            .eq("content_hash", content_hash)
+            .limit(1)
+            .execute()
+        )
+        if res.data and len(res.data) > 0:
+            cached_text = res.data[0]["analysis_text"]
+            if cached_text:
+                return cached_text
+    except Exception as e:
+        print(f"[cache read] Error: {e}")
 
-    # 2) استدعاء Gemini مع رفع max_output_tokens لضمان عدم النقص
+    # 2) لم نجد كاش → استدعاء Gemini (تم رفع max_output_tokens لضمان عدم النقص)
     gen_config = types.GenerateContentConfig(
-        temperature=0.7,
+        temperature=0.7, # رفعنا الحرارة قليلاً ليكون التحليل أكثر تدفقاً
         top_p=0.9,
-        max_output_tokens=4000,
+        max_output_tokens=4000, # تم الرفع من 1600 إلى 4000 لضمان اكتمال الـ 6 نقاط
     )
 
     if IS_EN:
-        prompt = f"Analyze using Jonah Berger's STEPPS (1-6). Score each /10 with 3-4 lines of detail. Do not show total %. Text:\n{text}"
+        prompt = f"""
+You are a viral content expert specialized in Jonah Berger's STEPPS framework.
+Analyze the following text using ONLY the six STEPPS factors:
+1) Social Currency
+2) Triggers
+3) Emotion
+4) Public
+5) Practical Value
+6) Stories
+
+Rules:
+- Give a score out of 10 for each factor.
+- Provide a detailed 3-4 line explanation for each point.
+- Ensure the analysis is deep and complete for all 6 points.
+- Do NOT provide a final total percentage.
+- Language: English.
+
+Text to analyze:
+{text}
+"""
     else:
-        prompt = f"حلّل النص باستخدام عوامل STEPPS الستّة. أعطِ درجة من 10 لكل عامل مع شرح مفصل 3-4 أسطر. لا تظهر نسبة إجمالية. النص:\n{text}"
+        prompt = f"""
+أنت خبير محتوى فيروسي متخصص في نموذج STEPPS لجونا بيرجر.
+حلّل النص التالي بناءً على عوامل STEPPS الستّة بشكل مفصل وكامل:
+1) Social Currency (العملة الاجتماعية)
+2) Triggers (المحفّزات)
+3) Emotion (المشاعر)
+4) Public (الظهور العام)
+5) Practical Value (القيمة العملية)
+6) Stories (القصص)
+
+قواعد:
+- أعطِ درجة من 10 لكل عامل.
+- اشرح كل نقطة في 3-4 أسطر مفصلة.
+- تأكد من إكمال التحليل للنقاط الستة كاملة دون توقف.
+- لا تذكر نسبة مئوية إجمالية.
+- اللغة: العربية.
+
+النص المراد تحليله:
+{text}
+"""
 
     MAX_RETRIES = 3
+    INITIAL_DELAY = 2
     analysis_text = ""
+
     for attempt in range(MAX_RETRIES):
         try:
-            response = genai_client.models.generate_content(model=MODEL_NAME, contents=prompt, config=gen_config)
+            response = genai_client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=gen_config,
+            )
             if response.text:
                 analysis_text = response.text
                 break
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded):
-            time.sleep(2 * (attempt + 1))
-        except: break
+            time.sleep(INITIAL_DELAY * (attempt + 1))
+        except Exception:
+            break
 
-    # 3) حفظ الكاش
-    if analysis_text.strip():
-        try:
-            supabase.table("viral_scores_cache").insert({"app_id": APP_ID, "content_hash": content_hash, "analysis_text": analysis_text}).execute()
-        except: pass
-    
+    if not analysis_text.strip():
+        return "⚠️ Error in generation" if IS_EN else "⚠️ فشل في توليد التحليل"
+
+    # 3) تخزين النتيجة في الكاش
+    try:
+        supabase.table("viral_scores_cache").insert(
+            {
+                "app_id": APP_ID,
+                "content_hash": content_hash,
+                "analysis_text": analysis_text,
+            }
+        ).execute()
+    except Exception as e:
+        print(f"[cache write] Error: {e}")
+
     return analysis_text
-
 # ==============================
 # 5) واجهة المستخدم
 # ==============================
@@ -325,3 +393,4 @@ st.markdown("""
   <span>جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil</span>
 </div>
 """, unsafe_allow_html=True)
+
