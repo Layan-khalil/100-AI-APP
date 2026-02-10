@@ -1,451 +1,731 @@
 import streamlit as st
+import os
+import json
+import hashlib
+import re
+from supabase import create_client, Client
 from google import genai
-from google.genai import types 
-# استيراد الأخطاء الصحيحة ومكتبة time للانتظار
-from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded 
-import json 
-from pandas import DataFrame 
-import time # تم إضافة هذا الاستيراد للانتظار بين المحاولات
+from google.genai import types
+from postgrest.exceptions import APIError
+import random
+import time
 
-# تعريف ثوابت إعادة المحاولة
-MAX_RETRIES = 3
-INITIAL_DELAY = 5 # ثواني انتظار أولية
+# =========================================================
+# 0) إعداد الصفحة
+# =========================================================
+st.set_page_config(page_title="وثيقة الشخصية الرقمية", layout="wide", initial_sidebar_state="collapsed")
 
-# =================================================================
-# 1. إعدادات الصفحة و RTL/Responsive CSS
-# =================================================================
+# =========================================================
+# ✅ 0.1) UI Language Switch (label flips like previous tools)
+# =========================================================
+if "ui_lang" not in st.session_state:
+    st.session_state["ui_lang"] = "AR"
 
-st.set_page_config(
-    page_title=" وثيقة الشخصية الرقمية ",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+_current_lang = st.session_state["ui_lang"]
+toggle_label = "English" if _current_lang == "AR" else "العربية"
+lang_toggle = st.toggle(toggle_label, value=(_current_lang == "EN"))
+st.session_state["ui_lang"] = "EN" if lang_toggle else "AR"
+IS_EN = (st.session_state["ui_lang"] == "EN")
 
-# قواعد CSS الشاملة لفرض RTL على كل عناصر Streamlit وإضافة تنسيق الـ Footer
-st.markdown("""
+# =========================================================
+# ✅ 0.2) Text dictionary (كل واجهة التطبيق + placeholders)
+# =========================================================
+TXT = {
+    "title": "Integrated Digital Persona Document" if IS_EN else "👤 وثيقة الشخصية الرقمية المتكاملة",
+    "btn_generate": "Generate persona" if IS_EN else "توليد الشخصية",
+    "caption": (
+        "Enter 3 inputs and get: persona + tone + a complete 30-day content plan + communication boundaries."
+        if IS_EN
+        else
+        "اكتب 3 معلومات… واحصل على وثيقة Persona كاملة: هوية + نبرة + خطة محتوى 30 يوم + حدود تواصل."
+    ),
+    "exp_title": "What does this tool do?" if IS_EN else "ما الذي تفعله هذه الأداة؟",
+    "exp_body": (
+        "Most people create content without a clear identity, which causes inconsistent messaging.\n"
+        "This tool generates a practical Persona document that acts as a reference for your identity, tone, and content direction.\n\n"
+        "You will receive:\n"
+        "• Persona name + short bio\n"
+        "• Tone of voice + style + keywords\n"
+        "• A complete 30-day content plan (day-by-day)\n"
+        "• Communication boundaries (what to talk about / avoid, DM & comments policy)\n\n"
+        "Example input:\n"
+        "Field: Fitness coach\n"
+        "Goal: Attract clients\n"
+        "Audience: Busy women who want short workouts\n\n"
+        "Example output (short):\n"
+        "Name: The Busy Fit Coach\n"
+        "Tone: Friendly, motivating\n"
+        "Day 1: 30-sec Reel: “3-minute workout for busy days” + CTA: Save & follow\n\n"
+        "Designed for creators, freelancers, founders, and anyone moving from random posting to a clear digital presence."
+        if IS_EN
+        else
+        "معظم الناس تنشر محتوى بدون هوية واضحة، فيتغير الأسلوب وتضيع الرسالة.\n"
+        "هذه الأداة تبني لك وثيقة Persona عملية تكون مرجع ثابت لهويتك ونبرة تواصلك واتجاه محتواك.\n\n"
+        "ستحصل على:\n"
+        "• اسم + نبذة شخصية\n"
+        "• نبرة الصوت + أسلوب الكلام + كلمات مفتاحية\n"
+        "• خطة محتوى كاملة لمدة 30 يوم (يوم بيوم)\n"
+        "• حدود تواصل (شو تحكي/شو تتجنب + سياسة الرسائل والتعليقات)\n\n"
+        "مثال إدخال:\n"
+        "المجال: مدربة لياقة\n"
+        "الهدف: جذب عملاء\n"
+        "الجمهور: نساء مشغولات بدهم تمارين سريعة\n\n"
+        "مثال مخرجات (مختصر):\n"
+        "الاسم: مدربة اللياقة للنساء المشغولات\n"
+        "النبرة: ودودة ومحفّزة\n"
+        "اليوم 1: Reel 30 ثانية: “تمرين 3 دقائق لليوم المزدحم” + CTA: احفظي وتابعي\n\n"
+        "مناسبة لصنّاع المحتوى، المستقلين، رواد الأعمال، وكل شخص يريد حضور رقمي واضح بدل النشر العشوائي."
+    ),
+    "field_label": "Specialization / Field" if IS_EN else "مجال العمل/التخصص",
+    "goal_label": "Main goal" if IS_EN else "الهدف الأساسي",
+    "aud_label": "Target audience description" if IS_EN else "وصف الجمهور المستهدف",
+    "field_ph": "e.g., Emotional intelligence coach / AI educator / E-commerce consultant" if IS_EN else "مثال: مدرب ذكاء عاطفي / تعليم AI / مستشار تجارة إلكترونية",
+    "goal_ph": "e.g., Build audience, attract clients, sell a service or course" if IS_EN else "مثال: بناء جمهور، جذب عملاء، بيع خدمة أو كورس",
+    "aud_ph": "Describe who you want to reach: age, pain points, goals, platforms..." if IS_EN else "اكتب وصف تفصيلي: العمر، المشاكل، الأهداف، المنصات التي يستخدموها…",
+    "warn_fill": "Please fill all fields." if IS_EN else "يرجى تعبئة كافة الحقول.",
+    "wait": "Please wait a few seconds before trying again." if IS_EN else "يرجى الانتظار قليلاً قبل المحاولة مجدداً.",
+    "spinner": "Generating persona and plan..." if IS_EN else "جاري توليد الشخصية والخطة...",
+    "err": "Error:" if IS_EN else "حدث خطأ:",
+    "res_title": "Result" if IS_EN else "النتيجة",
+    "sec1": "Persona identity & core message" if IS_EN else "👤 الهوية والرسالة الأساسية",
+    "name": "Suggested name" if IS_EN else "الاسم المقترح",
+    "bio": "Short bio" if IS_EN else "النبذة التعريفية",
+    "sec2": "Tone of voice & communication style" if IS_EN else "🗣️ نبرة الصوت وأسلوب التواصل",
+    "tone": "Tone" if IS_EN else "النبرة",
+    "style": "Style" if IS_EN else "الأسلوب",
+    "keywords": "Voice keywords" if IS_EN else "كلمات نستخدمها",
+    "sec3": "30-day content plan" if IS_EN else "📅 خطة المحتوى (30 يوماً)",
+    "day": "Day" if IS_EN else "اليوم",
+    "type": "Type" if IS_EN else "النوع",
+    "platform": "Platform" if IS_EN else "المنصة",
+    "cta": "CTA" if IS_EN else "CTA",
+    "sec4": "Communication boundaries & policies" if IS_EN else "🛡️ حدود التواصل وسياسات القناة",
+    "talk": "✅ Topics to focus on" if IS_EN else "✅ مواضيع نركز عليها",
+    "avoid": "❌ Topics to avoid" if IS_EN else "❌ مواضيع نتجنبها",
+    "dm": "📩 DM policy" if IS_EN else "📩 سياسة الرسائل",
+    "comments": "💬 Comment policy" if IS_EN else "💬 سياسة التعليقات",
+
+    "plain_title": "📄 Export as Plain Text" if IS_EN else "📄 تصدير كنص واحد",
+    "plain_hint": "Copy the text below or download it as .txt" if IS_EN else "انسخي النص التالي أو حمّليه كملف .txt",
+    "plain_btn": "Generate Plain Text" if IS_EN else "تجهيز النص الموحد",
+
+    "fb_title": "Feedback" if IS_EN else "ساعدنا في تطوير الأداة",
+    "fb_q": "How was your experience?" if IS_EN else "كيف كانت تجربتك مع هذه الأداة؟",
+    "fb_yes": "This tool was useful for me" if IS_EN else "هذه الأداة كانت مفيدة بالنسبة لي",
+    "fb_no": "This tool was not useful" if IS_EN else "هذه الأداة لم تكن مفيدة",
+    "fb_missing": "What was missing? (one sentence)" if IS_EN else "ما الذي كان ناقصاً؟ (جملة واحدة)",
+    "fb_exp": "Quick feedback (3 questions)" if IS_EN else "فيدباك سريع (3 أسئلة)",
+    "fb_p1": "1) What problem were you trying to solve?" if IS_EN else "1) ما المشكلة التي كنت تحاول حلّها؟",
+    "fb_p2": "2) Did it help? Why yes/no?" if IS_EN else "2) هل ساعدتك الأداة؟ لماذا نعم/لا؟",
+    "fb_p3": "3) What would make this a must-use tool for you?" if IS_EN else "3) ما الذي سيجعل هذه الأداة «لازم تُستخدم» بالنسبة لك؟",
+    "fb_btn": "Submit feedback" if IS_EN else "إرسال الفيدباك",
+    "fb_warn": "Write at least one line." if IS_EN else "اكتب سطر واحد على الأقل 🙏",
+    "fb_ok": "Feedback saved ✅ Thank you!" if IS_EN else "تم حفظ الفيدباك ✅ شكرًا لك!",
+    "fb_err": "Supabase error:" if IS_EN else "خطأ من Supabase:",
+}
+
+# =========================================================
+# 1) المفاتيح وتهيئة العميل
+# =========================================================
+def get_secret(key: str):
+    return st.secrets.get(key) or os.environ.get(key)
+
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
+GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY")
+
+if not all([SUPABASE_URL, SUPABASE_KEY, GOOGLE_API_KEY]):
+    st.error("⚠️ Missing secrets in Secrets / Env." if IS_EN else "⚠️ مفاتيح الربط ناقصة في Secrets أو Env.")
+    st.stop()
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+genai_client = genai.Client(api_key=GOOGLE_API_KEY)
+
+# ✅ موديلات صحيحة
+MODEL_CANDIDATES = [
+    "gemini-2.0-flash-001",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro-001",
+]
+
+def get_working_model():
+    """تحديد الموديل المتاح وتخزينه لتجنب استهلاك الوقت في كل محاولة"""
+    if "working_model" in st.session_state:
+        return st.session_state["working_model"]
+
+    for m in MODEL_CANDIDATES:
+        try:
+            genai_client.models.generate_content(
+                model=m,
+                contents="test",
+                config=types.GenerateContentConfig(max_output_tokens=1),
+            )
+            st.session_state["working_model"] = m
+            return m
+        except Exception:
+            continue
+
+    st.session_state["working_model"] = MODEL_CANDIDATES[0]
+    return MODEL_CANDIDATES[0]
+
+# =========================================================
+# ✅ حماية من النقر المتكرر + Retry
+# =========================================================
+def can_call_model(min_seconds: int = 12) -> bool:
+    now = time.time()
+    last = st.session_state.get("last_model_call_ts", 0.0)
+    if (now - last) < min_seconds:
+        return False
+    st.session_state["last_model_call_ts"] = now
+    return True
+
+def call_model_with_retry(model: str, prompt: str, cfg: types.GenerateContentConfig, retries: int = 4) -> str:
+    last_err = None
+    for attempt in range(retries):
+        try:
+            resp = genai_client.models.generate_content(model=model, contents=prompt, config=cfg)
+            return resp.text or ""
+        except Exception as e:
+            last_err = e
+            msg = str(e)
+            if any(x in msg for x in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE"]):
+                sleep_s = (2 ** attempt) + random.uniform(0.2, 0.8)
+                time.sleep(sleep_s)
+                continue
+            raise
+    raise last_err
+
+# =========================================================
+# 2) CSS (RTL للعربي / LTR للإنجليزي + الفوتر دائمًا RTL)
+# =========================================================
+DIR = "ltr" if IS_EN else "rtl"
+ALIGN = "left" if IS_EN else "right"
+
+st.markdown(f"""
 <style>
-    /* ---------------------------------
-    *** قواعد CSS الشاملة لـ RTL ***
-    ----------------------------------- */
-    
-    html, body, .block-container, .stApp {
-        direction: rtl !important;
-    }
-    h1, h2, h3, h4, h5, h6, p, .stMarkdown, .stText { 
-        text-align: right !important;
-        direction: rtl !important;
-    }
-    textarea, input, .st-emotion-cache-1jm6hrl, .st-emotion-cache-1jm6hrl * { 
-        direction: rtl !important;
-        text-align: right !important;
-    }
-    
-    /* استهداف أزرار التفاعل (Responsive) */
-    .stButton>button {
-        font-weight: bold;
-        width: 100%; 
-        direction: rtl !important;
-            background-color: #f75d5d; /* أحمر داكن للإيحاء بالتحليل السلبي */
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 10px 20px;
-        font-size: 1.1em;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 15px rgba(247, 93, 93, 0.4); 
-    }
-    .stButton>button:hover {
-        background-color: #e04b4b; 
-        box-shadow: 0 6px 20px rgba(247, 93, 93, 0.6); 
-        transform: translateY(-2px); 
-    }
+@import url('https://fonts.googleapis.com/css2?family=Cairo&display=swap');
+#MainMenu {{ visibility: hidden; }}
+footer {{ visibility: hidden; }}
+div[data-testid="stToolbar"] {{ visibility: hidden; }}
+div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
+div[data-testid="stDecoration"] {{ visibility: hidden; }}
+div[class*="viewerBadge_container"] {{ display: none !important; }}
+div[class*="viewerBadge_link"] {{ display: none !important; }}
+div[class*="viewerBadge_text"] {{ display: none !important; }}
 
-    /* تنسيق خاص لأقسام الـ Persona */
-    .persona-section {
-        background-color: #ffffff;
-        padding: 20px;
-        border-radius: 12px;
-        margin-bottom: 25px;
-        border: 1px solid #e0e0e0;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    }
-    .persona-section h3 {
-        color: #004d99; /* لون أزرق غامق للعناوين الفرعية */
-        text-align: right !important;
-        border-bottom: 3px solid #007bff; /* خط تحت العنوان */
-        padding-bottom: 5px;
-        margin-top: 0;
-        margin-bottom: 15px;
-        font-weight: 700;
-    }
-    .list-item {
-        margin-bottom: 5px;
-        padding-right: 15px;
-        position: relative;
-    }
-    .list-item::before {
-        content: '•';
-        color: #007bff;
-        font-weight: bold;
-        display: inline-block;
-        width: 1em;
-        margin-right: -1em;
-        position: absolute;
-        right: 0;
-    }
+html, body, [data-testid="stAppViewContainer"], .main {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    font-family: 'Cairo', sans-serif !important;
+}}
 
-    /* حل مشكلة st.caption */
-    .rtl-caption {
-        direction: rtl !important;
-        text-align: right !important;
-        margin-top: -15px; 
-        font-size: 0.9em; 
-        color: rgba(49, 51, 63, 0.6); 
-    }
-    
-    /* تنسيق حقوق النشر (الـ Footer) */
-    .footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        background-color: #f0f2f6; 
-        color: #808080;
-        text-align: center !important; 
-        padding: 5px;
-        font-size: 0.75em;
-        border-top: 1px solid #e0e0e0;
-        z-index: 100;
-    }
+h1, h2, h3, h4, h5, h6, p, div, span, li, .stMarkdown {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    unicode-bidi: plaintext !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    line-height: 1.9;
+}}
+
+.stButton > button {{
+    background-color: #e63946 !important;
+    color: white !important;
+    border-radius: 28px;
+    height: 3em;
+    width: 100%;
+    font-weight: 800;
+}}
+
+.footer-container {{
+    width: 100%;
+    text-align: center;
+    margin-top: 45px;
+    padding-top: 20px;
+    border-top: 1px solid #666;
+    font-size: 13px;
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}}
+.footer-container, .footer-container * {{
+    direction: rtl !important;
+    text-align: center !important;
+}}
 </style>
 """, unsafe_allow_html=True)
 
+# =========================================================
+# 3) Analytics + Feedback RPC + Cache
+# =========================================================
+APP_ID = "4-persona-builder"
 
-# =================================================================
-# 2. تهيئة نموذج Gemini 
-# =================================================================
-client = None
-try:
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-    if not API_KEY:
-        st.warning("⚠️ لم يتم العثور على مفتاح GEMINI_API_KEY. يرجى إضافته إلى ملف secrets.toml.")
-    else:
-        # تهيئة بسيطة للعميل
-        client = genai.Client(api_key=API_KEY)
-except Exception as e:
-    st.error(f"خطأ غير متوقع أثناء التهيئة: {e}")
-    client = None
+def track_cta_event(app_id: str):
+    try:
+        supabase.rpc("increment_cta", {"p_app_id": app_id}).execute()
+    except Exception:
+        pass
 
-# =================================================================
-# 3. دالة توليد شخصية المؤثر (Persona) مع آلية إعادة المحاولة
-# =================================================================
-
-def generate_influencer_persona(field, goal, audience):
-    """
-    يستخدم Gemini لبناء وثيقة شخصية رقمية متكاملة بـ 8 أقسام.
-    تستخدم آلية إعادة المحاولة للتعامل مع أخطاء المهلة والضغط (503/429).
-    """
-    if not client:
-        return {"error": "فشل الاتصال بـ Gemini API. يرجى التحقق من المفتاح."}
-        
-    system_prompt = (
-        "أنت استراتيجي علامات تجارية رقمية من الطراز الأول. مهمتك هي إنشاء وثيقة "
-        "شخصية (Persona) شاملة تتجاوز الوصف السطحي، لتكون خارطة طريق للنمو الرقمي "
-        "على مدار 90 يوماً وتحدد الهوية المستقبلية بعد 6 أشهر. "
-        "يجب أن يكون الإخراج في تنسيق JSON حصراً يتبع المخطط المحدد بدقة."
-    )
-
-    prompt = f"""
-    يرجى توليد وثيقة شخصية رقمية متكاملة بـ 8 أقسام بناءً على المعايير التالية:
-
-    1. **مجال العمل/التخصص:** {field}
-    2. **الهدف الرئيسي للمؤثر:** {goal}
-    3. **الجمهور المستهدف (التفصيلي):** {audience}
-
-    **التعليمات الخاصة بالتوليد:**
-    - يجب أن تكون الأقسام 6 و 7 و 8 (الخطة، التطوير، التحول) قابلة للتنفيذ وعملية جداً.
-    - يجب أن تكون "قصة الأصل" (Section 2) مؤثرة وتحدد صراعاً واضحاً.
-    - يجب توليد 30 منشوراً مختلفاً في القسم 6 (30 يوم، منشور واحد في كل يوم).
-    - يجب أن يكون السبب في "لماذا يجب على الناس المتابعة" مقنعاً وواضحاً.
-    """
-    
-    # مخطط JSON مفصل لضمان مخرجات منظمة لجميع الأقسام الـ 8
-    response_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "section1": {
-                "type": "OBJECT",
-                "properties": {
-                    "persona_name": {"type": "STRING", "description": "اسم الشخصية"},
-                    "definition": {"type": "STRING", "description": "تعريف 3-4 جمل"},
-                    "core_message": {"type": "STRING", "description": "الرسالة الجوهرية"},
-                    "primary_purpose": {"type": "STRING", "description": "الغرض المهني الأساسي"}
-                }
-            },
-            "section2": {
-                "type": "OBJECT",
-                "properties": {
-                    "how_it_started": {"type": "STRING", "description": "كيف بدأت؟"},
-                    "existential_questions": {"type": "STRING", "description": "الأسئلة الوجودية"},
-                    "conflict": {"type": "STRING", "description": "الصراع"},
-                    "turning_point": {"type": "STRING", "description": "نقطة التحول"}
-                }
-            },
-            "section3": {
-                "type": "OBJECT",
-                "properties": {
-                    "tone": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    "unique_vocabulary": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    "style": {"type": "ARRAY", "items": {"type": "STRING"}}
-                }
-            },
-            "section4": {
-                "type": "OBJECT",
-                "properties": {
-                    "content_types_to_publish": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    "prohibited_content": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    "formula": {"type": "STRING"}
-                }
-            },
-            "section5": {
-                "type": "OBJECT",
-                "properties": {
-                    "stage": {"type": "STRING"},
-                    "fears": {"type": "STRING"},
-                    "seeking": {"type": "STRING"},
-                    "cry_about": {"type": "STRING"},
-                    "risk": {"type": "STRING"}
-                }
-            },
-            "section6": {
-                "type": "ARRAY",
-                "description": "خطة 30 يوم محتوى (بحد أقصى 30 عنصر)",
-                "items": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "day": {"type": "INTEGER"},
-                        "content_type": {"type": "STRING"},
-                        "idea_summary": {"type": "STRING"},
-                        "cta": {"type": "STRING"},
-                        "platform": {"type": "STRING"}
-                    }
-                }
-            },
-            "section7": {
-                "type": "OBJECT",
-                "properties": {
-                    "values_to_develop": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    "required_sources": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    "daily_habits": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    "skills_roadmap": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    "checkpoints": {"type": "ARRAY", "items": {"type": "STRING"}}
-                }
-            },
-            "section8": {
-                "type": "OBJECT",
-                "properties": {
-                    "after_6_months": {"type": "STRING"},
-                    "new_identity": {"type": "STRING"},
-                    "say_goodbye_to": {"type": "STRING"},
-                    "why_follow": {"type": "STRING"}
-                }
-            }
+def save_feedback_via_rpc(app_name, useful, missing_reason, problem_text, helpful_reason, must_use_text):
+    return supabase.rpc(
+        "submit_app_feedback",
+        {
+            "p_app_name": app_name,
+            "p_useful": useful,
+            "p_missing_reason": missing_reason,
+            "p_problem_text": problem_text,
+            "p_helpful_reason": helpful_reason,
+            "p_must_use_text": must_use_text,
         },
-        "propertyOrdering": ["section1", "section2", "section3", "section4", "section5", "section6", "section7", "section8"]
-    }
+    ).execute()
 
-    # حلقة إعادة المحاولة
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    response_mime_type="application/json",
-                    response_schema=response_schema
-                )
-                # تم حذف 'request_options' لتجنب الخطأ
-            )
-            # إذا نجحت، نرجع النتيجة
-            return json.loads(response.text)
+def make_content_hash(text: str) -> str:
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
-        # التقاط الأخطاء التي تحتاج لإعادة محاولة: الضغط (429) أو الخدمة غير متوفرة (503) أو انتهاء المهلة (DeadlineExceeded)
-        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
-            if attempt < MAX_RETRIES - 1:
-                delay = INITIAL_DELAY * (2 ** attempt) # تأخير متزايد: 5, 10, 20 ثانية...
-                st.warning(f"⚠️ فشلت المحاولة {attempt + 1} بسبب ضغط الخادم (503/429/Timeout). سيتم إعادة المحاولة بعد {delay} ثواني...")
-                time.sleep(delay)
-            else:
-                # إذا كانت هذه آخر محاولة
-                st.error(f"خطأ بالتوليد (API): فشلت جميع المحاولات ({MAX_RETRIES}). يرجى المحاولة لاحقاً. التفاصيل: {e}")
-                return {"error": str(e)}
-        except Exception as e:
-            # التقاط أي أخطاء أخرى غير متوقعة
-            st.error(f"خطأ غير متوقع: {e}")
-            return {"error": str(e)}
+def cache_get(app_id: str, content_hash: str):
+    try:
+        res = (
+            supabase.table("viral_scores_cache")
+            .select("analysis_text")
+            .eq("app_id", app_id)
+            .eq("content_hash", content_hash)
+            .limit(1)
+            .execute()
+        )
+        return json.loads(res.data[0]["analysis_text"]) if res.data else None
+    except Exception:
+        return None
 
-    # لن يتم الوصول إلى هذا السطر إلا إذا فشلت جميع المحاولات في Catch الأخطاء
-    return {"error": "فشل غير محدد في توليد المحتوى بعد محاولات متعددة."}
+def cache_set(app_id: str, content_hash: str, analysis: dict):
+    try:
+        supabase.table("viral_scores_cache").upsert(
+            {
+                "app_id": app_id,
+                "content_hash": content_hash,
+                "analysis_text": json.dumps(analysis, ensure_ascii=False),
+            },
+            on_conflict="app_id,content_hash",
+        ).execute()
+    except Exception:
+        pass
 
+# =========================================================
+# 4) منطق التوليد (نفس المنطق + لغة output حسب السويتش)
+# =========================================================
+def clean_json_text(text: str):
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    return match.group(0) if match else text
 
-# =================================================================
-# 4. دالة مساعدة لعرض الأقسام المفصلة (للقوائم والجداول)
-# =================================================================
+def generate_persona_safe(field, goal, audience):
+    current_model = get_working_model()
 
-def display_list_section(title, data):
-    """عرض قسم يحتوي على قائمة أو عناصر رئيسية."""
-    st.markdown(f"**{title}:**")
-    if isinstance(data, list):
-        for item in data:
-            st.markdown(f'<p class="list-item">{item}</p>', unsafe_allow_html=True)
-    elif isinstance(data, str):
-        st.write(data)
+    if IS_EN:
+        prompt = f"""
+Create a professional Persona document in English:
+Field: {field} | Goal: {goal} | Audience: {audience}
 
-# =================================================================
-# 5. واجهة المستخدم (Streamlit UI)
-# =================================================================
+Return JSON only (no extra text) including these sections (section3 must be 30 full days):
+{{
+  "section1": {{"name": "Persona name", "bio": "Short bio"}},
+  "section2": {{"tone": ["Tone 1", "Tone 2"], "style": "Communication style", "voice_keywords": ["keywords"]}},
+  "section3": [
+    {{"day": 1, "content_type": "Type", "idea": "Content idea", "cta": "CTA", "platform": "Platform"}}
+  ],
+  "section4": {{
+    "talk_about": ["Topics to focus on"],
+    "avoid_talking_about": ["Topics to avoid"],
+    "dm_policy": "DM policy",
+    "comment_policy": "Comment policy"
+  }}
+}}
 
-st.title("👤 منشئ شخصية المؤثر المتكاملة")
-st.markdown('8 أقسام كاملة لتأسيس شخصية مؤثرة قادرة على بناء جمهور ونفوذ رقمي', unsafe_allow_html=True)
-st.caption("يرجى تعبئة الحقول ببيانات حقيقية ذات معنى لتحقيق أفضل النتائج ! ")
-st.markdown("---")
-col1, col2 = st.columns(2)
-
-with col1:
-    field = st.text_input("مجال العمل/التخصص:", key="field_input_ui")
-with col2:
-    goal = st.text_input("الهدف من بناء الشخصية:", key="goal_input_ui")
-
-audience = st.text_area("الجمهور المستهدف:", key="audience_input_ui")
-
-if st.button("✨ توليد شخصية الآن", use_container_width=True):
-    if not field or not goal or not audience:
-        st.warning("املأ جميع الحقول 🙏")
+Important:
+- section3 must contain exactly 30 items from day 1 to day 30.
+- content_type examples: Short video, Story, Post, Long video, Live, Carousel.
+- platform examples: LinkedIn, Instagram, TikTok, YouTube.
+"""
     else:
-        with st.spinner("جاري بناء وثيقة شخصية كاملة... قد تستغرق العملية وقتاً..."):
-            persona = generate_influencer_persona(field, goal, audience)
+        prompt = f"""
+أنشئ وثيقة شخصية رقمية (Persona) احترافية باللغة العربية:
+المجال: {field} | الهدف: {goal} | الجمهور: {audience}
 
-        if persona and not "error" in persona:
-            st.markdown("---")
-            st.markdown("## ✅ وثيقة الشخصية الرقمية المتكاملة (8 أقسام)")
+المطلوب رد JSON فقط يتضمن الأقسام التالية (30 يوماً كاملة):
+{{
+  "section1": {{"name": "اسم الشخصية", "bio": "نبذة"}},
+  "section2": {{"tone": ["نبرة1", "نبرة2"], "style": "أسلوب الكلام", "voice_keywords": ["كلمات"]}},
+  "section3": [ {{"day": 1, "content_type": "نوع", "idea": "فكرة محتوى", "cta": "طلب", "platform": "المنصة"}} ],
+  "section4": {{
+    "talk_about": ["مواضيع للنقاش"],
+    "avoid_talking_about": ["مواضيع للتجنب"],
+    "dm_policy": "سياسة الخاص",
+    "comment_policy": "سياسة التعليقات"
+  }}
+}}
+* ملاحظة هامة: يجب أن يحتوي section3 على 30 يوماً كاملة بدون أي اختصار.
+"""
 
-            # ----------------------------------------------------
-            # 1. SECTION 1 — الهوية الأساسية
-            # ----------------------------------------------------
-            with st.container():
-                st.markdown('<div class="persona-section">', unsafe_allow_html=True)
-                st.markdown("<h3>🔥 SECTION 1 — الهوية الأساسية</h3>", unsafe_allow_html=True)
-                id_data = persona.get('section1', {})
-                st.write(f"**اسم الشخصية:** **{id_data.get('persona_name', 'غير محدد')}**")
-                st.write(f"**من هي هذه الشخصية؟:** {id_data.get('definition', 'غير محدد')}")
-                st.write(f"**الرسالة الجوهرية:** {id_data.get('core_message', 'غير محدد')}")
-                st.write(f"**الغرض المهني الأساسي:** {id_data.get('primary_purpose', 'غير محدد')}")
-                st.markdown('</div>', unsafe_allow_html=True)
+    try:
+        cfg = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.5,
+            max_output_tokens=4000,
+        )
+        raw_text = call_model_with_retry(current_model, prompt, cfg, retries=4)
+        return json.loads(clean_json_text(raw_text))
+    except Exception as e:
+        return {"error": str(e)}
 
-            # ----------------------------------------------------
-            # 2. SECTION 2 — Origin Story
-            # ----------------------------------------------------
-            with st.container():
-                st.markdown('<div class="persona-section">', unsafe_allow_html=True)
-                st.markdown("<h3>🔥 SECTION 2 — سرد أصل الشخصية (Origin Story)</h3>", unsafe_allow_html=True)
-                origin_data = persona.get('section2', {})
-                st.write(f"**كيف بدأت؟:** {origin_data.get('how_it_started', 'غير محدد')}")
-                st.write(f"**الأسئلة الوجودية:** {origin_data.get('existential_questions', 'غير محدد')}")
-                st.write(f"**الصراع (Conflict):** {origin_data.get('conflict', 'غير محدد')}")
-                st.write(f"**نقطة التحول:** {origin_data.get('turning_point', 'غير محدد')}")
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            # ----------------------------------------------------
-            # 3. SECTION 3 & 4 (التواصل والإطار) - في أعمدة
-            # ----------------------------------------------------
-            col_comm, col_frame = st.columns(2)
+# =========================================================
+# 4.1) Plain Text Builder (for export)
+# =========================================================
+def build_plain_text(data: dict, is_en: bool) -> str:
+    s1 = data.get("section1", {}) or {}
+    s2 = data.get("section2", {}) or {}
+    s3 = data.get("section3", []) or []
+    s4 = data.get("section4", {}) or {}
 
-            with col_comm:
-                with st.container():
-                    st.markdown('<div class="persona-section">', unsafe_allow_html=True)
-                    st.markdown("<h3>🔥 SECTION 3 — خصائص التواصل واللغة</h3>", unsafe_allow_html=True)
-                    comm_data = persona.get('section3', {})
-                    display_list_section("النبرة", comm_data.get('tone', []))
-                    display_list_section("مفردات خاصة", comm_data.get('unique_vocabulary', []))
-                    display_list_section("الأسلوب", comm_data.get('style', []))
-                    st.markdown('</div>', unsafe_allow_html=True)
+    if is_en:
+        out = []
+        out.append("INTEGRATED PERSONA DOCUMENT")
+        out.append("")
+        out.append("1) IDENTITY")
+        out.append(f"- Name: {s1.get('name','—')}")
+        out.append(f"- Bio: {s1.get('bio','—')}")
+        out.append("")
+        out.append("2) TONE & STYLE")
+        out.append(f"- Tone: {', '.join(s2.get('tone', []) or []) or '—'}")
+        out.append(f"- Style: {s2.get('style','—')}")
+        out.append(f"- Keywords: {', '.join(s2.get('voice_keywords', []) or []) or '—'}")
+        out.append("")
+        out.append("3) 30-DAY CONTENT PLAN")
+        for item in s3:
+            d = item.get("day", "—")
+            out.append(f"Day {d}: {item.get('idea','—')}")
+            out.append(f"  Type: {item.get('content_type','—')} | Platform: {item.get('platform','—')} | CTA: {item.get('cta','—')}")
+        out.append("")
+        out.append("4) COMMUNICATION BOUNDARIES")
+        out.append(f"- Talk about: {', '.join(s4.get('talk_about', []) or []) or '—'}")
+        out.append(f"- Avoid: {', '.join(s4.get('avoid_talking_about', []) or []) or '—'}")
+        out.append(f"- DM policy: {s4.get('dm_policy','—')}")
+        out.append(f"- Comment policy: {s4.get('comment_policy','—')}")
+        return "\n".join(out)
 
-            with col_frame:
-                with st.container():
-                    st.markdown('<div class="persona-section">', unsafe_allow_html=True)
-                    st.markdown("<h3>🔥 SECTION 4 — Content Style Framework</h3>", unsafe_allow_html=True)
-                    frame_data = persona.get('section4', {})
-                    display_list_section("أنواع المحتوى المنشور", frame_data.get('content_types_to_publish', []))
-                    display_list_section("المحتوى الممنوع نشره", frame_data.get('prohibited_content', []))
-                    st.write(f"**الصيغة المُتبعة (Formula):** {frame_data.get('formula', 'قيمة + قصة + دعوة للتطبيق')}")
-                    st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        out = []
+        out.append("وثيقة الشخصية الرقمية المتكاملة")
+        out.append("")
+        out.append("1) الهوية")
+        out.append(f"- الاسم: {s1.get('name','—')}")
+        out.append(f"- النبذة: {s1.get('bio','—')}")
+        out.append("")
+        out.append("2) النبرة وأسلوب التواصل")
+        out.append(f"- النبرة: {', '.join(s2.get('tone', []) or []) or '—'}")
+        out.append(f"- الأسلوب: {s2.get('style','—')}")
+        out.append(f"- كلمات مفتاحية: {', '.join(s2.get('voice_keywords', []) or []) or '—'}")
+        out.append("")
+        out.append("3) خطة محتوى 30 يوم")
+        for item in s3:
+            d = item.get("day", "—")
+            out.append(f"اليوم {d}: {item.get('idea','—')}")
+            out.append(f"  النوع: {item.get('content_type','—')} | المنصة: {item.get('platform','—')} | CTA: {item.get('cta','—')}")
+        out.append("")
+        out.append("4) حدود التواصل")
+        out.append(f"- مواضيع نركز عليها: {', '.join(s4.get('talk_about', []) or []) or '—'}")
+        out.append(f"- مواضيع نتجنبها: {', '.join(s4.get('avoid_talking_about', []) or []) or '—'}")
+        out.append(f"- سياسة الرسائل: {s4.get('dm_policy','—')}")
+        out.append(f"- سياسة التعليقات: {s4.get('comment_policy','—')}")
+        return "\n".join(out)
 
-            # ----------------------------------------------------
-            # 4. SECTION 5 — Audience Journey
-            # ----------------------------------------------------
-            with st.container():
-                st.markdown('<div class="persona-section">', unsafe_allow_html=True)
-                st.markdown("<h3>🔥 SECTION 5 — Audience Journey (رحلة الجمهور)</h3>", unsafe_allow_html=True)
-                audience_data = persona.get('section5', {})
-                st.write(f"**الجمهور في أي مرحلة؟:** {audience_data.get('stage', 'غير محدد')}")
-                st.write(f"**شو الذي يخاف منه؟:** {audience_data.get('fears', 'غير محدد')}")
-                st.write(f"**شو اللي ببحث عنه؟:** {audience_data.get('seeking', 'غير محدد')}")
-                st.write(f"**شو الذي سيبكي عليه؟ (المشاعر):** {audience_data.get('cry_about', 'غير محدد')}")
-                st.write(f"**شو الذي يمكنه يخسره؟:** {audience_data.get('risk', 'غير محدد')}")
-                st.markdown('</div>', unsafe_allow_html=True)
+# =========================================================
+# 5) واجهة المستخدم (كلها تتبدل حسب اللغة)
+# =========================================================
+st.title(TXT["title"])
+st.caption(TXT["caption"])
 
-            # ----------------------------------------------------
-            # 5. SECTION 6 — محتوى 30 يوم جاهز (جدول)
-            # ----------------------------------------------------
-            with st.expander("✨ اضغط هنا لمشاهدة خطة المحتوى الجاهزة لـ 30 يوم", expanded=False):
-                st.markdown("<h3>🔥 SECTION 6 — محتوى 30 يوم جاهز (خطة النشر)</h3>", unsafe_allow_html=True)
-                content_30_days = persona.get('section6', [])
-                if content_30_days and isinstance(content_30_days, list) and content_30_days[0].get('day'):
-                    df = DataFrame(content_30_days)
-                    df.columns = ["اليوم", "نوع المحتوى", "ملخص الفكرة", "الدعوة للإجراء (CTA)", "المنصة المقترحة"]
-                    st.dataframe(df.set_index('اليوم'), use_container_width=True)
-                else:
-                    st.warning("لم يتم توليد خطة محتوى الـ 30 يوم بشكل صحيح. (قد يكون خطأ مؤقتاً في API)")
+with st.expander(TXT["exp_title"], expanded=True):
+    st.markdown(TXT["exp_body"])
 
-            # ----------------------------------------------------
-            # 6. SECTION 7 — برنامج تطوير الشخصية لمدة 90 يوم
-            # ----------------------------------------------------
-            with st.expander("🚀 اضغط هنا لمشاهدة برنامج تطوير الشخصية لـ 90 يوم", expanded=False):
-                st.markdown("<h3>🔥 SECTION 7 — برنامج تطوير الشخصية لمدة 90 يوم</h3>", unsafe_allow_html=True)
-                dev_data = persona.get('section7', {})
-                
-                if dev_data:
-                    st.markdown("#### ⚡ القيم والمهارات")
-                    display_list_section("قيم يجب أن تطورها", dev_data.get('values_to_develop', []))
-                    display_list_section("مهارات لازم تطورها (Skills Roadmap)", dev_data.get('skills_roadmap', []))
-                    
-                    st.markdown("#### 📚 المصادر والعادات")
-                    display_list_section("مصادر يجب أن تقرأها/تتابعها", dev_data.get('required_sources', []))
-                    display_list_section("عادات يومية (Daily Habits)", dev_data.get('daily_habits', []))
-                    display_list_section("Checkpoints كل أسبوع (قياس الأثر)", dev_data.get('checkpoints', []))
-
-            # ----------------------------------------------------
-            # 7. SECTION 8 — Personal Transformation Map
-            # ----------------------------------------------------
-            with st.container():
-                st.markdown('<div class="persona-section">', unsafe_allow_html=True)
-                st.markdown("<h3>🔥 SECTION 8 — Personal Transformation Map (خارطة التحول)</h3>", unsafe_allow_html=True)
-                trans_data = persona.get('section8', {})
-                st.write(f"**🧠 كيف سيصبح بعد 6 شهور؟:** {trans_data.get('after_6_months', 'غير محدد')}")
-                st.write(f"**🧠 ما هي هويته الجديدة؟:** {trans_data.get('new_identity', 'غير محدد')}")
-                st.write(f"**🧠 ما الذي سيودعُه؟:** {trans_data.get('say_goodbye_to', 'غير محدد')}")
-                
-                st.markdown("---")
-                st.write(f"**⭐ النتيجة النهائية: لماذا يجب على الناس المتابعة؟** {trans_data.get('why_follow', 'غير محدد')}")
-                st.markdown('</div>', unsafe_allow_html=True)
-
-        elif persona and "error" in persona:
-             # الرسالة ستظهر من دالة generate_influencer_persona
-            pass
-            
-# 8. حقوق النشر (الـ Footer)
+# ==============================
+# Testimonials (EN only + LTR always)
+# shows for both languages
+# ==============================
+st.markdown("---")
 st.markdown(
-    '<div class="footer">جميع الحقوق محفوظة © 2026 | AI Product Creator - Layan Khalil</div>',
-    unsafe_allow_html=True
+    """
+<style>
+.testimonial-title{
+  text-align:center;
+  font-size:20px;
+  font-weight:800;
+  margin: 10px 0 12px 0;
+  direction:ltr !important;
+  unicode-bidi: plaintext !important;
+}
+.testimonial-wrapper{
+  display:flex;
+  gap:14px;
+  overflow-x:auto;
+  padding: 8px 8px 14px 8px;
+  scroll-snap-type:x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+.testimonial-wrapper::-webkit-scrollbar{height:8px;}
+.testimonial-wrapper::-webkit-scrollbar-thumb{
+  background: rgba(255,255,255,0.18);
+  border-radius: 99px;
+}
+.testimonial-card{
+  flex: 0 0 auto;
+  width: 320px;
+  max-width: 85vw;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-left: 5px solid #e63946;
+  border-radius: 14px;
+  padding: 16px 16px 14px 16px;
+  scroll-snap-align:center;
+
+  direction:ltr !important;
+  text-align:center !important;
+  unicode-bidi: plaintext !important;
+
+  height:auto !important;
+  min-height: unset !important;
+}
+.testimonial-text{
+  color: rgba(255,255,255,0.92);
+  font-size: 14px;
+  line-height: 1.6;
+  margin:0 !important;
+  padding:0 !important;
+
+  direction:ltr !important;
+  text-align:center !important;
+  unicode-bidi: plaintext !important;
+}
+.testimonial-author{
+  margin-top:10px;
+  font-weight:700;
+  color: rgba(255,255,255,0.72);
+  font-size: 13px;
+
+  direction:ltr !important;
+  text-align:center !important;
+  unicode-bidi: plaintext !important;
+}
+</style>
+
+<div class="testimonial-title">💬 What users are saying</div>
+
+<div class="testimonial-wrapper">
+  <div class="testimonial-card">
+    <div class="testimonial-text">A solid AI tool — simple, practical, and worth trying.</div>
+    <div class="testimonial-author">— Abdul Razzaq</div>
+  </div>
+
+  <div class="testimonial-card">
+    <div class="testimonial-text">It worked well and gave me a clearer direction.</div>
+    <div class="testimonial-author">— Imad Tawil</div>
+  </div>
+
+  <div class="testimonial-card">
+    <div class="testimonial-text">
+      Excellent tool and clearly built with real effort. Adding a small example showing how a user benefits from the output would make it even easier for first-time users.
+    </div>
+    <div class="testimonial-author">— Salem Khalil</div>
+  </div>
+
+  <div class="testimonial-card">
+    <div class="testimonial-text">
+      Useful and simplifies my strategy. Exporting the advice as one plain text would make it easier — especially if it becomes available as an app.
+    </div>
+    <div class="testimonial-author">— Rashid Dossett</div>
+  </div>
+
+  <div class="testimonial-card">
+    <div class="testimonial-text">
+      Well done. More input space would make entering information easier and clearer. A few styling improvements could also enhance the overall experience.
+    </div>
+    <div class="testimonial-author">— Sarda Kedir</div>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# ------------------------------
+# Inputs (expanded as requested)
+# ------------------------------
+col1, col2 = st.columns(2)
+with col1:
+    f_in = st.text_area(TXT["field_label"], placeholder=TXT["field_ph"], height=90)
+    g_in = st.text_area(TXT["goal_label"], placeholder=TXT["goal_ph"], height=90)
+with col2:
+    a_in = st.text_area(TXT["aud_label"], placeholder=TXT["aud_ph"], height=220)
+
+if st.button(TXT["btn_generate"]):
+    if not all([f_in.strip(), g_in.strip(), a_in.strip()]):
+        st.warning(TXT["warn_fill"])
+    else:
+        track_cta_event(APP_ID)
+        c_hash = make_content_hash(f"lang={st.session_state['ui_lang']}||{f_in}||{g_in}||{a_in}")
+        cached = cache_get(APP_ID, c_hash)
+
+        if cached:
+            res = cached
+        else:
+            if not can_call_model(min_seconds=12):
+                st.warning(TXT["wait"])
+                st.stop()
+            with st.spinner(TXT["spinner"]):
+                res = generate_persona_safe(f_in, g_in, a_in)
+                if "error" not in res:
+                    cache_set(APP_ID, c_hash, res)
+
+        if "error" in res:
+            err_msg = str(res["error"])
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                st.warning(
+                    "⚡ The tool is currently busy. Please try again in a few seconds."
+                    if IS_EN
+                    else
+                    "⚡ الأداة مشغولة حالياً، يرجى المحاولة بعد ثوانٍ قليلة."
+                )
+            else:
+                st.error(f"{TXT['err']} {err_msg}")
+        else:
+            st.session_state["persona_result"] = res
+            st.session_state["persona_has_result"] = True
+
+# =========================================================
+# 6) عرض النتائج + Plain Text Export + Feedback
+# =========================================================
+if st.session_state.get("persona_has_result") and "persona_result" in st.session_state:
+    data = st.session_state["persona_result"]
+    st.subheader(TXT["res_title"])
+
+    with st.expander(TXT["sec1"], expanded=True):
+        st.write(f"**{TXT['name']}:** {data.get('section1', {}).get('name', '—')}")
+        st.write(f"**{TXT['bio']}:** {data.get('section1', {}).get('bio', '—')}")
+
+    with st.expander(TXT["sec2"], expanded=False):
+        s2 = data.get("section2", {})
+        st.write(f"**{TXT['tone']}:** {', '.join(s2.get('tone', []) or [])}")
+        st.write(f"**{TXT['style']}:** {s2.get('style', '—')}")
+        st.write(f"**{TXT['keywords']}:** {', '.join(s2.get('voice_keywords', []) or [])}")
+
+    with st.expander(TXT["sec3"], expanded=False):
+        for item in data.get("section3", []) or []:
+            st.markdown(f"**{TXT['day']} {item.get('day', '—')}:** {item.get('idea', '—')}")
+            st.caption(
+                f"{TXT['type']}: {item.get('content_type', '—')} | "
+                f"{TXT['platform']}: {item.get('platform', '—')} | "
+                f"{TXT['cta']}: {item.get('cta', '—')}"
+            )
+
+    with st.expander(TXT["sec4"], expanded=False):
+        s4 = data.get("section4", {})
+        st.write(f"**{TXT['talk']}:** " + ", ".join(s4.get("talk_about", []) or []))
+        st.write(f"**{TXT['avoid']}:** " + ", ".join(s4.get("avoid_talking_about", []) or []))
+        st.info(f"**{TXT['dm']}:** {s4.get('dm_policy', '—')}")
+        st.info(f"**{TXT['comments']}:** {s4.get('comment_policy', '—')}")
+
+    # ------------------------------
+    # Plain Text Export (new)
+    # ------------------------------
+    st.divider()
+    st.subheader(TXT["plain_title"])
+    st.caption(TXT["plain_hint"])
+
+    if st.button(TXT["plain_btn"], key=f"{APP_ID}_plain_btn"):
+        st.session_state[f"{APP_ID}_plain_text"] = build_plain_text(data, IS_EN)
+
+    plain_text_val = st.session_state.get(f"{APP_ID}_plain_text")
+    if plain_text_val:
+        st.text_area(
+            label="",
+            value=plain_text_val,
+            height=320,
+            key=f"{APP_ID}_plain_area",
+        )
+        st.download_button(
+            label="⬇️ Download .txt" if IS_EN else "⬇️ تحميل ملف .txt",
+            data=plain_text_val.encode("utf-8"),
+            file_name="persona_document.txt",
+            mime="text/plain",
+            key=f"{APP_ID}_plain_download",
+        )
+
+    # ------------------------------
+    # Feedback (as-is)
+    # ------------------------------
+    st.divider()
+    st.subheader(TXT["fb_title"])
+
+    feedback_choice = st.radio(
+        TXT["fb_q"],
+        (TXT["fb_yes"], TXT["fb_no"]),
+        key=f"{APP_ID}_feedback_choice",
+    )
+    useful = (feedback_choice == TXT["fb_yes"])
+
+    missing_reason = None
+    if not useful:
+        missing_reason = st.text_input(
+            TXT["fb_missing"],
+            max_chars=200,
+            key=f"{APP_ID}_missing_reason",
+        )
+
+    with st.expander(TXT["fb_exp"], expanded=False):
+        problem_text = st.text_area(TXT["fb_p1"], max_chars=280, key=f"{APP_ID}_problem_text")
+        helpful_reason = st.text_area(TXT["fb_p2"], max_chars=280, key=f"{APP_ID}_helpful_reason")
+        must_use_text = st.text_area(TXT["fb_p3"], max_chars=280, key=f"{APP_ID}_must_use_text")
+
+        submit_feedback = st.button(TXT["fb_btn"], key=f"{APP_ID}_submit_feedback")
+
+        if submit_feedback:
+            has_any_text = any(
+                [
+                    (missing_reason or "").strip(),
+                    (problem_text or "").strip(),
+                    (helpful_reason or "").strip(),
+                    (must_use_text or "").strip(),
+                ]
+            )
+
+            if (not useful) and (not has_any_text):
+                st.warning(TXT["fb_warn"])
+            else:
+                try:
+                    save_feedback_via_rpc(
+                        app_name=APP_ID,
+                        useful=useful,
+                        missing_reason=(missing_reason or "").strip() or None,
+                        problem_text=(problem_text or "").strip() or None,
+                        helpful_reason=(helpful_reason or "").strip() or None,
+                        must_use_text=(must_use_text or "").strip() or None,
+                    )
+                    st.success(TXT["fb_ok"])
+                except APIError as e:
+                    st.error(TXT["fb_err"])
+                    try:
+                        st.json(e.args[0])
+                    except Exception:
+                        st.write(str(e))
+                except Exception as e:
+                    st.exception(e)
+
+# =========================================================
+# 7) Footer (دائمًا RTL)
+# =========================================================
+st.markdown(
+    """
+<div class="footer-container">
+  <span>جميع الحقوق محفوظة © 2026 |</span>
+  <span>AI Product Builder - Layan Khalil</span>
+</div>
+""",
+    unsafe_allow_html=True,
 )
