@@ -55,30 +55,9 @@ genai_client = genai.Client(api_key=GOOGLE_API_KEY)
 
 APP_ID = "viral-potential-scorer-v1"
 
-MODEL_CANDIDATES = [
-    "gemini-2.0-flash-001",
-    "gemini-1.5-flash-001",
-    "gemini-1.5-pro-001",
-]
+MODEL_NAME = "gemini-1.5-flash"
 
-def get_working_model():
-    if "working_model" in st.session_state:
-        return st.session_state["working_model"]
 
-    for m in MODEL_CANDIDATES:
-        try:
-            genai_client.models.generate_content(
-                model=m,
-                contents="test",
-                config=types.GenerateContentConfig(max_output_tokens=1),
-            )
-            st.session_state["working_model"] = m
-            return m
-        except Exception:
-            continue
-
-    st.session_state["working_model"] = MODEL_CANDIDATES[0]
-    return MODEL_CANDIDATES[0]
 
 # =========================================================
 # 3) CSS (same style + hide Streamlit header + footer hidden)
@@ -340,7 +319,7 @@ def call_model_with_retry(model: str, prompt: str, cfg: types.GenerateContentCon
 # 7) Generate analysis (STEPPS)
 # =========================================================
 def generate_stepps_analysis(text: str) -> str:
-    current_model = get_working_model()
+    current_model = MODEL_NAME
     cfg = types.GenerateContentConfig(
         temperature=0.6,
         top_p=0.9,
@@ -650,3 +629,4 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
