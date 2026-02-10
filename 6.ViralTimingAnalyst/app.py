@@ -109,7 +109,7 @@ h1,h2,h3,h4,p,label {{
 # =========================================================
 client = None
 try:
-    API_KEY = st.secrets.get("GEMINI_API_KEY","")
+    API_KEY = st.secrets.get("GOOGLE_API_KEY","")
     if API_KEY:
         client = genai.Client(api_key=API_KEY)
 except:
@@ -271,3 +271,4 @@ st.markdown("""
 جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil
 </div>
 """, unsafe_allow_html=True)
+
