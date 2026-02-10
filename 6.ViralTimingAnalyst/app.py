@@ -1,217 +1,273 @@
 import streamlit as st
 from google import genai
-from google.genai import types as g_types
+from google.genai import types
 from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
-import json 
+import json
 import time
 import re
 
-# =================================================================
-# 1. إعدادات الصفحة و RTL/Responsive CSS
-# =================================================================
-
+# =========================================================
+# 1️⃣ PAGE CONFIG
+# =========================================================
 st.set_page_config(
-    page_title="مُحلّل توقيت الـ Viral",
+    page_title="Viral Timing Analyst",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# قواعد CSS لفرض RTL والتنسيق الأصلي (الزر العريض والنتائج)
-st.markdown("""
+# =========================================================
+# 2️⃣ LANGUAGE SWITCH
+# =========================================================
+if "ui_lang" not in st.session_state:
+    st.session_state["ui_lang"] = "AR"
+
+lang_toggle = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
+st.session_state["ui_lang"] = "EN" if lang_toggle else "AR"
+IS_EN = st.session_state["ui_lang"] == "EN"
+
+DIR = "ltr" if IS_EN else "rtl"
+ALIGN = "left" if IS_EN else "right"
+
+# =========================================================
+# 3️⃣ CSS (نفس نمط أدواتك)
+# =========================================================
+st.markdown(f"""
 <style>
-    /* قواعد CSS الشاملة لـ RTL والتنسيق */
-    html, body, .block-container, .stApp { direction: rtl !important; }
-    h1, h2, h3, h4, h5, h6, p, .stMarkdown, .stText, .stAlert, label { text-align: right !important; direction: rtl !important; }
 
-    /* === تنسيق محتوى الـ Expander ليكون محاذياً لليمين تماماً وبداية السطر === */
-    div[data-testid="stExpander"] .stMarkdown p, 
-    div[data-testid="stExpander"] .stMarkdown li,
-    div[data-testid="stExpander"] .stMarkdown div,
-    div[data-testid="stExpander"] label {
-        text-align: right !important;
-        direction: rtl !important;
-        display: block;
-        width: 100%;
-    }
+#MainMenu {{visibility:hidden;}}
+footer {{visibility:hidden;}}
+header {{visibility:hidden;}}
 
-    /* === تنسيق الزر ليصبح بعرض الشاشة (Stretch) === */
-    div.stButton > button { 
-        font-weight: bold; 
-        width: 100% !important; 
-        background-color: #f97316; 
-        color: white !important; 
-        border-radius: 8px; 
-        padding: 10px 20px; 
-        font-size: 1.1em; 
-        transition: all 0.3s ease; 
-        box-shadow: 0 4px 15px rgba(249, 115, 22, 0.5); 
-        display: block !important;
-    }
-    div.stButton > button:hover { 
-        background-color: #ea580c; 
-        box-shadow: 0 6px 20px rgba(249, 115, 22, 0.7); 
-        transform: translateY(-2px); 
-    }
+html, body, .stApp {{
+    direction:{DIR};
+    text-align:{ALIGN};
+}}
 
-    /* === تنسيق بطاقة النتيجة === */
-    .analysis-card { 
-        padding: 30px; border-radius: 12px; margin-top: 30px; 
-        background-color: #fff7ed; 
-        border-right: 8px solid #f97316; 
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15); 
-    }
-    .result-title { 
-        font-size: 1.6em; font-weight: bold; color: #1e293b; margin-bottom: 20px; 
-        border-bottom: 2px solid #fdba74; padding-bottom: 10px;
-    }
-    
-    .time-prediction {
-        background-color: #fef3c7; 
-        color: #78350f; 
-        padding: 15px;
-        border-radius: 8px;
-        font-size: 1.2em;
-        font-weight: 700;
-        margin-top: 20px;
-        text-align: center !important;
-        border: 2px solid #fcd34d;
-    }
-    
-    .custom-footer {
-        position: fixed;
-        bottom: 0; right: 0; left: 0;
-        width: 100%; text-align: center;
-        padding: 10px 0; background-color: #f8f8f8;
-        color: #64748b; font-size: 0.85em;
-        border-top: 1px solid #e2e8f0; z-index: 100;
-    }
+h1,h2,h3,h4,p,label {{
+    direction:{DIR};
+    text-align:{ALIGN};
+}}
 
-    #MainMenu, footer, header { visibility: hidden; }
+.stButton > button {{
+    background:#e63946;
+    color:white;
+    font-weight:800;
+    width:100%;
+    border-radius:28px;
+    height:3.2em;
+}}
+
+.time-box {{
+    background:#fff7ed;
+    border-right:6px solid #f97316;
+    padding:18px;
+    border-radius:12px;
+    font-size:18px;
+    font-weight:700;
+    text-align:center;
+}}
+
+.result-box {{
+    border:1px solid rgba(230,57,70,0.4);
+    border-radius:16px;
+    padding:16px;
+    margin-top:12px;
+}}
+
+.footer-container {{
+    width:100%;
+    text-align:center;
+    margin-top:50px;
+    padding-top:20px;
+    border-top:1px solid #666;
+    font-size:13px;
+}}
+
+.testimonial-wrapper {{
+  display:flex;
+  gap:14px;
+  overflow-x:auto;
+  padding:10px;
+}}
+
+.testimonial-card {{
+  min-width:300px;
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.15);
+  border-left:5px solid #e63946;
+  border-radius:14px;
+  padding:14px;
+  text-align:center;
+  direction:ltr;
+}}
+
 </style>
 """, unsafe_allow_html=True)
 
-
-# =================================================================
-# 2. تهيئة نموذج Gemini (حصراً بالإصدار المتاح)
-# =================================================================
+# =========================================================
+# 4️⃣ GEMINI INIT
+# =========================================================
 client = None
-MAX_RETRIES = 3
-INITIAL_DELAY = 5
-
 try:
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+    API_KEY = st.secrets.get("GEMINI_API_KEY","")
     if API_KEY:
-        client = genai.Client(api_key=API_KEY) 
-except Exception:
+        client = genai.Client(api_key=API_KEY)
+except:
     client = None
 
-# =================================================================
-# 3. دالة تحليل التوقيت
-# =================================================================
+MODEL_NAME = "gemini-1.5-flash"
 
+# =========================================================
+# 5️⃣ ANALYSIS FUNCTION
+# =========================================================
 def analyze_timing(topic, audience, content_type):
+
     if not client:
-        return {"error": "فشل الاتصال بـ Gemini API."}, []
+        return {"error":"API connection failed"}
 
-    # الموديل المدعوم حصراً في هذه البيئة للبحث هو gemini-2.5-flash-preview-09-2025
-    model_name = 'gemini-2.5-flash-preview-09-2025'
+    prompt = f"""
+You are a viral timing analyst.
 
-    system_prompt = (
-        "You are a specialized Viral Timing Analyst. Use Google Search data. "
-        "Return ONLY a JSON object with: 'BestTimePrediction' (DayOfWeek, TimeWindow), 'AnalysisSummary', 'SearchQueryUsed'. "
-        "Language: Arabic."
+Return ONLY JSON:
+
+{{
+"BestTimePrediction": {{
+"DayOfWeek":"",
+"TimeWindow":""
+}},
+"AnalysisSummary":"",
+"SearchQueryUsed":""
+}}
+
+Topic: {topic}
+Audience: {audience}
+Content type: {content_type}
+"""
+
+    cfg = types.GenerateContentConfig(
+        temperature=0.6,
+        max_output_tokens=1200
     )
-    
-    prompt = f"Best viral posting time for: Topic: {topic}, Audience: {audience}, Type: {content_type}. Search for latest trends."
-    
-    # لا نستخدم response_mime_type لتجنب التعارض مع أداة البحث (خطأ 400)
-    config = g_types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        tools=[{"google_search": {}}]
-    )
-    
-    for attempt in range(MAX_RETRIES):
+
+    for _ in range(3):
         try:
-            response = client.models.generate_content(
-                model=model_name,
+            resp = client.models.generate_content(
+                model=MODEL_NAME,
                 contents=prompt,
-                config=config 
+                config=cfg
             )
-            
-            raw_text = response.text.strip()
-            # استخراج JSON يدوياً لتفادي أخطاء التنسيق
-            json_match = re.search(r'({.*})', raw_text, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(1)), []
-            else:
-                return json.loads(raw_text), []
+
+            raw = resp.text.strip()
+            match = re.search(r'{{.*}}', raw, re.DOTALL)
+            if match:
+                return json.loads(match.group())
 
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded):
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(INITIAL_DELAY * (attempt + 1))
-                continue
-            return {"error": "الخادم مشغول حالياً، يرجى المحاولة بعد دقيقة."}, []
-        except Exception as e:
-            return {"error": str(e)}, []
+            time.sleep(2)
 
-    return {"error": "فشل التحليل بعد عدة محاولات."}, []
+    return {"error":"Model error"}
 
+# =========================================================
+# 6️⃣ UI
+# =========================================================
 
-# =================================================================
-# 4. واجهة المستخدم
-# =================================================================
+st.title("⏱️ Viral Timing Analyst" if IS_EN else "⏱️ مُحلّل توقيت الانتشار")
 
-st.title("⏱️ مُحلّل توقيت الـ Viral (الانتشار العالمي)")
-st.subheader("يتوقع أفضل نافذة نشر من خلال تحليل توقيت انتشار المواضيع المُماثلة عالمياً.")
+with st.expander("💡 How this tool works" if IS_EN else "💡 كيف تعمل الأداة"):
+    if IS_EN:
+        st.markdown("""
+This tool analyzes when similar content performs best.
 
-with st.expander("💡 التعليمات: كيف يعمل هذا المحلل؟"):
-    st.markdown("""
-        <div style="text-align: right; direction: rtl;">
-        هذا الأداة تستخدم الذكاء الاصطناعي وبحث جوجل المباشر لـ:
-        <ol>
-            <li>البحث عن المحتوى الشائع والمنتشر <b>مؤخراً</b> في نطاق موضوعك.</li>
-            <li>تحليل <b>التوقيت الزمني</b> لنشر تلك المواضيع الناجحة.</li>
-            <li>استخلاص نافذة زمنية موحدة بالاعتماد على التوقيت العالمي (GMT+0).</li>
-        </ol>
-        </div>
-    """, unsafe_allow_html=True)
+It helps you:
+- Understand audience activity timing
+- Publish when attention is highest
+- Increase chances of engagement
+
+Example:
+AI content for creators often performs better Tuesday evenings.
+""")
+    else:
+        st.markdown("""
+هذه الأداة تحلل توقيت انتشار المحتوى المشابه لموضوعك.
+
+تساعدك على:
+- فهم أوقات نشاط الجمهور
+- النشر في الوقت الذي يكون فيه الانتباه أعلى
+- زيادة فرصة التفاعل
+
+مثال:
+محتوى الذكاء الاصطناعي غالباً يحقق تفاعل أعلى مساء الثلاثاء.
+""")
 
 st.markdown("---")
 
 col1, col2 = st.columns(2)
-with col1:
-    topic = st.text_input("1. الموضوع:", placeholder="مثلاً: ريادة الأعمال")
-with col2:
-    audience = st.text_input("2. الجمهور (اختياري):", placeholder="مثلاً: جيل زد")
+
+topic = col1.text_input("Topic" if IS_EN else "الموضوع")
+audience = col2.text_input("Audience (optional)" if IS_EN else "الجمهور (اختياري)")
 
 content_type = st.selectbox(
-    "3. نوع المحتوى:",
-    ("مقال/منشور طويل (LinkedIn/Blog)", "فيديو قصير (Reels/TikTok)", "إنفوجرافيك/صورة ثابتة", "سلسلة تغريدات (X)", "بودكاست")
+    "Content Type" if IS_EN else "نوع المحتوى",
+    ["LinkedIn Post","Short Video","Tweet","Image","Podcast"]
 )
 
-# الزر بعرض الشاشة
-if st.button("🚀 تحليل التوقيت الفيروسي العالمي"):
-    if not topic.strip():
-        st.warning("الرجاء إدخال الموضوع.")
+if st.button("Analyze 🚀" if IS_EN else "تحليل 🚀"):
+    with st.spinner("Analyzing..." if IS_EN else "جاري التحليل..."):
+        result = analyze_timing(topic,audience,content_type)
+
+    if "error" in result:
+        st.error(result["error"])
     else:
-        with st.spinner("جاري البحث والتحليل العالمي... يرجى الانتظار"):
-            analysis_data, _ = analyze_timing(topic.strip(), audience.strip(), content_type)
+        pred = result["BestTimePrediction"]
+        st.markdown(f"""
+        <div class="time-box">
+        {pred.get("DayOfWeek")} | {pred.get("TimeWindow")}
+        </div>
+        """, unsafe_allow_html=True)
 
-        if "error" in analysis_data:
-            st.error(f"فشل التحليل: {analysis_data['error']}")
-        elif analysis_data:
-            prediction = analysis_data.get("BestTimePrediction", {})
-            st.markdown(f"""
-            <div class="time-prediction">
-                اليوم المُوصى به: {prediction.get("DayOfWeek", "-")} | النافذة: {prediction.get("TimeWindow", "-")}
-            </div>
-            """, unsafe_allow_html=True)
+        st.markdown("### Analysis" if IS_EN else "### شرح التحليل")
+        st.write(result["AnalysisSummary"])
 
-            st.markdown('<div class="result-title">شرح وتحليل التوقيت</div>', unsafe_allow_html=True)
-            st.write(analysis_data.get("AnalysisSummary", ""))
-            st.info(f"استعلام البحث المستخدم: {analysis_data.get('SearchQueryUsed', '---')}")
+# =========================================================
+# 7️⃣ TESTIMONIALS
+# =========================================================
+st.markdown("---")
 
-st.markdown(
-    '<div class="custom-footer">جميع الحقوق محفوظة © 2026 | AI Product Creator - Layan Khalil</div>', 
-    unsafe_allow_html=True
-)
+st.markdown("""
+<div class="testimonial-wrapper">
+<div class="testimonial-card">
+Great tool. Helped me rethink when I publish content.
+<br><b>— Yousef Khalil</b>
+</div>
+
+<div class="testimonial-card">
+Very useful insight for creators trying to improve reach.
+<br><b>— Sally Daibes</b>
+</div>
+
+<div class="testimonial-card">
+Simple idea but extremely practical.
+<br><b>— Salem Khalil</b>
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# 8️⃣ FEEDBACK
+# =========================================================
+st.markdown("---")
+
+st.subheader("Feedback")
+
+feedback = st.text_area("Your feedback...")
+if st.button("Submit"):
+    st.success("Thank you for your feedback!")
+
+# =========================================================
+# 9️⃣ FOOTER
+# =========================================================
+st.markdown("""
+<div class="footer-container">
+جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil
+</div>
+""", unsafe_allow_html=True)
