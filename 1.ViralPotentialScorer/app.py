@@ -1,20 +1,23 @@
 import streamlit as st
 import uuid
 import hashlib
+import os
+import time
+import html
+from datetime import datetime, timezone
+
 from supabase import create_client, Client
-from google import genai
-from google.genai import types
-import time 
 from postgrest.exceptions import APIError
 
-# ✅ NEW (فقط لتفادي Error + retries)
+from google import genai
+from google.genai import types
 from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
 
 # ==============================
-# 0) إعدادات الصفحة أولاً
+# 0) Page Config
 # ==============================
 st.set_page_config(
-    page_title="  مُحلّل الانتشار الفيروسي",
+    page_title="مُحلّل الانتشار الفيروسي",
     layout="centered"
 )
 
@@ -29,14 +32,17 @@ st.session_state["ui_lang"] = "EN" if lang_choice else "AR"
 IS_EN = (st.session_state["ui_lang"] == "EN")
 
 # ==============================
-# 1) تحميل الـ Secrets والاتصال
+# 1) Secrets + Clients
 # ==============================
-try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-except Exception:
-    st.error("⚠️ فشل في تحميل المفاتيح السرّية (Secrets). تأكد من ضبطها في Streamlit Cloud.")
+def get_secret(key: str):
+    return st.secrets.get(key) or os.environ.get(key)
+
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
+GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY")
+
+if not all([SUPABASE_URL, SUPABASE_KEY, GOOGLE_API_KEY]):
+    st.error("⚠️ Missing secrets in Secrets / Env." if IS_EN else "⚠️ مفاتيح الربط ناقصة في Secrets أو Env.")
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -44,8 +50,33 @@ genai_client = genai.Client(api_key=GOOGLE_API_KEY)
 
 APP_ID = "viral-potential-scorer-v1"
 
-# ✅ استخدام نسخة مستقرة لضمان عدم حدوث Error 404
-MODEL_NAME = "gemini-1.5-flash"
+# ==============================
+# ✅ Working model selector (fix 404/invalid model)
+# ==============================
+MODEL_CANDIDATES = [
+    "gemini-2.0-flash-001",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro-001",
+]
+
+def get_working_model():
+    if "working_model" in st.session_state:
+        return st.session_state["working_model"]
+
+    for m in MODEL_CANDIDATES:
+        try:
+            genai_client.models.generate_content(
+                model=m,
+                contents="test",
+                config=types.GenerateContentConfig(max_output_tokens=1),
+            )
+            st.session_state["working_model"] = m
+            return m
+        except Exception:
+            continue
+
+    st.session_state["working_model"] = MODEL_CANDIDATES[0]
+    return MODEL_CANDIDATES[0]
 
 # =========================
 #  CSS & Responsive Styling
@@ -55,29 +86,14 @@ ALIGN = "left" if IS_EN else "right"
 
 st.markdown(f"""
 <style>
-
-/* إخفاء شريط Streamlit العلوي */
 #MainMenu {{ visibility: hidden; }}
-
-/* إخفاء الفوتر الافتراضي */
 footer {{ visibility: hidden; }}
-
-/* إخفاء أي عنصر فيه Created by / Avatar */
 div[data-testid="stToolbar"] {{ visibility: hidden; }}
 div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
 div[data-testid="stDecoration"] {{ visibility: hidden; }}
-
-/* إخفاء شريط الأسفل بالكامل (mobile + desktop) */
 div[class*="viewerBadge_container"] {{ display: none !important; }}
 div[class*="viewerBadge_link"] {{ display: none !important; }}
 div[class*="viewerBadge_text"] {{ display: none !important; }}
-
-/************ محتوى الصفحة الرئيسي  ************/
-.app-container {{
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 0 14px;
-}}
 
 html, body, [data-testid="stAppViewContainer"], .main {{
     direction: {DIR} !important;
@@ -97,28 +113,21 @@ html, body, [data-testid="stAppViewContainer"], .main {{
     font-size: 17px;
     transition: 0.2s ease-in-out;
 }}
-
 .stButton > button:hover {{
     background-color: #c82333 !important;
     transform: scale(1.01);
 }}
 
-/************ العناوين  ************/
 h1,h2,h3,h4,h5,h6 {{
     direction: {DIR} !important;
     text-align: {ALIGN} !important;
-    margin-right: 0;
 }}
-
-/************ الفقرات والنصوص  ************/
 p, div {{
     direction: {DIR} !important;
     text-align: {ALIGN} !important;
     word-break: break-word;
     line-height: 1.9;
 }}
-
-/************ القوائم  ************/
 ol, ul {{
     direction: {DIR} !important;
     text-align: {ALIGN} !important;
@@ -127,7 +136,6 @@ ol, ul {{
     margin-right: 0 !important;
 }}
 
-/************ ✅ صندوق النتيجة  ************/
 .result-box {{
     background: transparent !important;
     border: 2px solid rgba(230,57,70,0.45);
@@ -148,7 +156,6 @@ ol, ul {{
     line-height: 2.0;
 }}
 
-/************ الفوتر  ************/
 .footer-container {{
     width: 100%;
     text-align: center;
@@ -166,7 +173,7 @@ ol, ul {{
 """, unsafe_allow_html=True)
 
 # ==============================
-# 3) دوال التتبع
+# 3) Tracking (Visit + CTA)
 # ==============================
 def get_session_visitor_id() -> str:
     if "visitor_id" not in st.session_state:
@@ -177,36 +184,25 @@ def track_visit():
     visitor_id = get_session_visitor_id()
     try:
         supabase.rpc("track_visit", {"p_app_id": APP_ID, "p_visitor_id": visitor_id}).execute()
-    except: pass
+    except Exception:
+        pass
 
 def track_cta_event():
     try:
         supabase.rpc("increment_cta", {"p_app_id": APP_ID}).execute()
-    except: pass
+    except Exception:
+        pass
 
 track_visit()
 
-def save_feedback_via_rpc(app_name, useful, missing_reason, problem_text, helpful_reason, must_use_text):
-    return supabase.rpc("submit_app_feedback", {
-        "p_app_name": app_name, "p_useful": useful, "p_missing_reason": missing_reason,
-        "p_problem_text": problem_text, "p_helpful_reason": helpful_reason, "p_must_use_text": must_use_text,
-    }).execute()
-
 # ==============================
-# 4) الكاش والتحليل (التعديل المطلوب هنا)
+# 4) Cache + Analysis (FIXED)
 # ==============================
 def get_content_hash(text: str) -> str:
     normalized = " ".join(text.strip().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
-def get_or_create_analysis(text: str) -> str:
-    """
-    1) يحاول قراءة التحليل من جدول viral_scores_cache
-    2) إذا لم يجده، يستدعي Gemini ثم يخزن النتيجة في الكاش
-    """
-    content_hash = get_content_hash(text)
-
-    # 1) حاول قراءة الكاش
+def cache_get(content_hash: str):
     try:
         res = (
             supabase.table("viral_scores_cache")
@@ -216,22 +212,30 @@ def get_or_create_analysis(text: str) -> str:
             .limit(1)
             .execute()
         )
-        if res.data and len(res.data) > 0:
-            cached_text = res.data[0]["analysis_text"]
-            if cached_text:
-                return cached_text
-    except Exception as e:
-        print(f"[cache read] Error: {e}")
+        if res.data and res.data[0].get("analysis_text"):
+            return res.data[0]["analysis_text"]
+    except Exception:
+        pass
+    return None
 
-    # 2) لم نجد كاش → استدعاء Gemini (تم رفع max_output_tokens لضمان عدم النقص)
-    gen_config = types.GenerateContentConfig(
-        temperature=0.7, # رفعنا الحرارة قليلاً ليكون التحليل أكثر تدفقاً
-        top_p=0.9,
-        max_output_tokens=4000, # تم الرفع من 1600 إلى 4000 لضمان اكتمال الـ 6 نقاط
-    )
+def cache_set(content_hash: str, analysis_text: str):
+    # ✅ upsert بدل insert لتفادي duplicate / constraint issues
+    try:
+        supabase.table("viral_scores_cache").upsert(
+            {
+                "app_id": APP_ID,
+                "content_hash": content_hash,
+                "analysis_text": analysis_text,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="app_id,content_hash",
+        ).execute()
+    except Exception:
+        pass
 
+def build_prompt(text: str) -> str:
     if IS_EN:
-        prompt = f"""
+        return f"""
 You are a viral content expert specialized in Jonah Berger's STEPPS framework.
 Analyze the following text using ONLY the six STEPPS factors:
 1) Social Currency
@@ -251,8 +255,7 @@ Rules:
 Text to analyze:
 {text}
 """
-    else:
-        prompt = f"""
+    return f"""
 أنت خبير محتوى فيروسي متخصص في نموذج STEPPS لجونا بيرجر.
 حلّل النص التالي بناءً على عوامل STEPPS الستّة بشكل مفصل وكامل:
 1) Social Currency (العملة الاجتماعية)
@@ -273,43 +276,54 @@ Text to analyze:
 {text}
 """
 
-    MAX_RETRIES = 3
+def get_or_create_analysis(text: str) -> str:
+    content_hash = get_content_hash(text)
+
+    cached = cache_get(content_hash)
+    if cached:
+        return cached
+
+    model_name = get_working_model()
+
+    gen_config = types.GenerateContentConfig(
+        temperature=0.7,
+        top_p=0.9,
+        max_output_tokens=4000,
+    )
+
+    prompt = build_prompt(text)
+
+    MAX_RETRIES = 4
     INITIAL_DELAY = 2
-    analysis_text = ""
+    last_error = None
 
     for attempt in range(MAX_RETRIES):
         try:
             response = genai_client.models.generate_content(
-                model=MODEL_NAME,
+                model=model_name,
                 contents=prompt,
                 config=gen_config,
             )
-            if response.text:
-                analysis_text = response.text
-                break
-        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded):
+            analysis_text = (response.text or "").strip()
+            if analysis_text:
+                cache_set(content_hash, analysis_text)
+                return analysis_text
+
+            last_error = "Empty response from model"
+        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
+            last_error = str(e)
             time.sleep(INITIAL_DELAY * (attempt + 1))
-        except Exception:
+        except Exception as e:
+            last_error = str(e)
             break
 
-    if not analysis_text.strip():
-        return "⚠️ Error in generation" if IS_EN else "⚠️ فشل في توليد التحليل"
+    # ✅ الآن رح يرجع سبب الخطأ بدل رسالة عامة
+    if IS_EN:
+        return f"⚠️ Generation failed.\nReason: {last_error or 'Unknown error'}"
+    return f"⚠️ فشل في توليد التحليل.\nالسبب: {last_error or 'خطأ غير معروف'}"
 
-    # 3) تخزين النتيجة في الكاش
-    try:
-        supabase.table("viral_scores_cache").insert(
-            {
-                "app_id": APP_ID,
-                "content_hash": content_hash,
-                "analysis_text": analysis_text,
-            }
-        ).execute()
-    except Exception as e:
-        print(f"[cache write] Error: {e}")
-
-    return analysis_text
 # ==============================
-# 5) واجهة المستخدم
+# 5) UI
 # ==============================
 if IS_EN:
     st.title("🎯 Viral Potential Scorer")
@@ -371,26 +385,27 @@ if st.button(btn_label):
         track_cta_event()
         with st.spinner("⏳ Analyzing..." if IS_EN else "⏳ جاري التحليل..."):
             analysis = get_or_create_analysis(post_text.strip())
+
         st.session_state[f"{APP_ID}_has_result"] = True
         st.session_state[f"{APP_ID}_analysis"] = analysis
 
 # --- Result View ---
 if st.session_state.get(f"{APP_ID}_has_result"):
-    analysis = st.session_state.get(f"{APP_ID}_analysis", "")
-    if analysis.strip():
-        st.markdown(f"""
-        <div class="result-box">
-            <div class="result-title">{"📊 Analysis Results:" if IS_EN else "📊 نتائج التحليل:"}</div>
-            <div class="result-text">{analysis}</div>
-        </div>
-        """, unsafe_allow_html=True)
+    analysis = st.session_state.get(f"{APP_ID}_analysis", "") or ""
+    safe_analysis = html.escape(analysis)
+
+    st.markdown(f"""
+    <div class="result-box">
+        <div class="result-title">{"📊 Analysis Results:" if IS_EN else "📊 نتائج التحليل:"}</div>
+        <div class="result-text">{safe_analysis}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ==============================
-# 6) الفوتر
+# 6) Footer
 # ==============================
 st.markdown("""
 <div class="footer-container">
-  <span>جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil</span>
+  <span>جميع الحقوق محفوظة ©️ 2026 | AI Product Builder - Layan Khalil</span>
 </div>
 """, unsafe_allow_html=True)
-
