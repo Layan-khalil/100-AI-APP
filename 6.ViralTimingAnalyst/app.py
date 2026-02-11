@@ -174,14 +174,15 @@ h1, h2, h3, h4, h5, h6, p, div, span, label, li,
 }}
 
 .time-pill {{
-    background: #fef3c7;
-    color: #78350f;
-    padding: 12px 14px;
-    border-radius: 10px;
-    font-size: 1.05em;
-    font-weight: 800;
+     background-color: #fef3c7;
+    color: #111111 !important;   /* ✅ النص أسود */
+    padding: 15px;
+    border-radius: 8px;
+    font-size: 1.2em;
+    font-weight: 700;
+    margin-top: 20px;
     text-align: center !important;
-    border: 1px solid #fcd34d;
+    border: 2px solid #fcd34d;
 }}
 
 .footer-container {{
@@ -511,7 +512,7 @@ if st.session_state.get("has_result") and st.session_state.get("timing_res"):
     # 11) FEEDBACK
     # =========================================================
     st.divider()
-    st.subheader("📝 Feedback" if IS_EN else "📝 ساعدينا نطوّر الأداة")
+    st.subheader("📝 Feedback" if IS_EN else "📝 ساعدنا نطوّر الأداة من فضلك")
 
     feedback_choice = st.radio(
         "How was your experience?" if IS_EN else "كيف كانت تجربتك؟",
@@ -535,7 +536,7 @@ if st.session_state.get("has_result") and st.session_state.get("timing_res"):
     with st.expander("Quick feedback (3 questions)" if IS_EN else "فيدباك سريع (3 أسئلة)", expanded=False):
         problem_text = st.text_area(
             "1) What problem were you trying to solve?"
-            if IS_EN else "1) ما المشكلة التي كنتِ تحاولي تحلّيها؟",
+            if IS_EN else "1) ما المشكلة التي كنتِ تحاول تحلّيها؟",
             max_chars=280,
             key=f"{APP_ID}_problem_text",
         )
@@ -599,4 +600,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
