@@ -173,7 +173,7 @@ h1, h2, h3, h4, h5, h6, p, div, span, label, li,
     margin-bottom: 10px;
 }}
 
-.time-pill {<
+.time-pill {{
     background-color: #fef3c7;
     color: #111111 !important;
     padding: 14px;
@@ -607,6 +607,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
