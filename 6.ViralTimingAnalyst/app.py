@@ -103,16 +103,18 @@ genai_client = genai.Client(api_key=GOOGLE_API_KEY)
 st.markdown(
     f"""
 <style>
-#MainMenu {{ visibility: hidden; }}
-footer {{ visibility: hidden; }}
-header {{ visibility: hidden; }}
-div[data-testid="stToolbar"] {{ visibility: hidden; }}
-div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
-div[data-testid="stDecoration"] {{ visibility: hidden; }}
+/* ===== Hide Streamlit Chrome ===== */
+#MainMenu {{ visibility: hidden !important; }}
+header {{ visibility: hidden !important; }}
+footer {{ visibility: hidden !important; }}
+div[data-testid="stToolbar"] {{ visibility: hidden !important; }}
+div[data-testid="stStatusWidget"] {{ visibility: hidden !important; }}
+div[data-testid="stDecoration"] {{ visibility: hidden !important; }}
 div[class*="viewerBadge_container"] {{ display: none !important; }}
 div[class*="viewerBadge_link"] {{ display: none !important; }}
 div[class*="viewerBadge_text"] {{ display: none !important; }}
 
+/* ===== RTL/LTR Global ===== */
 html, body, [data-testid="stAppViewContainer"], .main {{
     direction: {DIR} !important;
     text-align: {ALIGN} !important;
@@ -133,11 +135,12 @@ h1, h2, h3, h4, h5, h6, p, div, span, label, li,
     unicode-bidi: plaintext !important;
 }}
 
+/* ===== Button ===== */
 .stButton > button {{
     font-weight: 800 !important;
     width: 100% !important;
     background-color: #f97316 !important;
-    color: white !important;
+    color: #ffffff !important;
     border-radius: 12px !important;
     padding: 11px 18px !important;
     font-size: 1.05em !important;
@@ -149,49 +152,54 @@ h1, h2, h3, h4, h5, h6, p, div, span, label, li,
     transform: scale(1.01);
 }}
 
+/* ===== Caption ===== */
 .rtl-caption {{
     direction: {DIR} !important;
     text-align: {ALIGN} !important;
     margin-top: -8px;
     font-size: 0.9em;
-    color: rgba(49, 51, 63, 0.62);
+    color: rgba(49, 51, 63, 0.62) !important;
 }}
 
+/* ===== Result Card ===== */
 .result-card {{
     margin-top: 18px;
     padding: 22px;
     border-radius: 14px;
-    background: #fff7ed;
-    border-right: 8px solid #f97316;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    background: #fff7ed !important;
+    border-right: 8px solid #f97316 !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12) !important;
 }}
 
 .result-title {{
     font-size: 1.25em;
     font-weight: 900;
-    color: #1e293b;
+    color: #1e293b !important;
     margin-bottom: 10px;
 }}
 
+/* ===== Time Pill (FORCE BLACK TEXT) ===== */
 .time-pill {{
-    background-color: #fef3c7;
+    background-color: #fef3c7 !important;
+    border: 2px solid #fcd34d !important;
+    border-radius: 10px !important;
+    padding: 14px !important;
+    font-weight: 800 !important;
+    text-align: center !important;
+
+    /* أقوى override */
     color: #111111 !important;
-    padding: 14px;
-    border-radius: 10px;
-    font-weight: 700;
-    text-align: center;
-    border: 2px solid #fcd34d;
+    text-shadow: none !important;
+    -webkit-text-fill-color: #111111 !important;
 }}
 
-/* مهم جداً — يكسر أي لون موروث من Streamlit */
-.time-pill,
-.time-pill div,
-.time-pill span,
-.time-pill p,
-.time-pill strong {{
+.time-pill * {{
     color: #111111 !important;
+    text-shadow: none !important;
+    -webkit-text-fill-color: #111111 !important;
 }}
 
+/* ===== Footer ===== */
 .footer-container {{
     width: 100%;
     text-align: center;
@@ -213,8 +221,6 @@ h1, h2, h3, h4, h5, h6, p, div, span, label, li,
 """,
     unsafe_allow_html=True,
 )
-
-
 # =========================================================
 # 4) CACHE HELPERS (Supabase viral_scores_cache)
 # =========================================================
@@ -607,6 +613,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
