@@ -24,7 +24,35 @@ st.set_page_config(
 )
 
 APP_ID = "6-viral-timing-analyst"
-MODEL_NAME = "gemini-1.5-flash"  # ✅ stable model (avoid google_search tool issues)
+
+MODEL_CANDIDATES = [
+    "gemini-2.0-flash-001",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro-001",
+]
+
+def get_working_model() -> str:
+    """Pick the first model that works with generate_content in this environment."""
+    if "working_model" in st.session_state:
+        return st.session_state["working_model"]
+
+    cfg = g_types.GenerateContentConfig(max_output_tokens=8, temperature=0.0)
+
+    for m in MODEL_CANDIDATES:
+        try:
+            _ = genai_client.models.generate_content(
+                model=m,
+                contents="ping",
+                config=cfg
+            )
+            st.session_state["working_model"] = m
+            return m
+        except Exception:
+            continue
+
+    # آخر حل: رجّع أول واحد (وبعدين رح يطلع الخطأ بوضوح إذا كلهم فشلوا)
+    st.session_state["working_model"] = MODEL_CANDIDATES[0]
+    return MODEL_CANDIDATES[0]  # ✅ stable model (avoid google_search tool issues)
 MAX_RETRIES = 3
 INITIAL_DELAY = 3
 
@@ -309,7 +337,7 @@ Rules:
     for attempt in range(MAX_RETRIES):
         try:
             resp = genai_client.models.generate_content(
-                model=MODEL_NAME,
+                model=get_working_model(),
                 contents=prompt,
                 config=cfg,
             )
@@ -332,10 +360,10 @@ Rules:
 # =========================================================
 if IS_EN:
     st.title("⏱️ Viral Timing Analyst (UTC)")
-    st.caption("Find the best posting window in **UTC (GMT+0)** based on your topic, audience, and content type.")
+    st.caption("Find the best posting Time in **UTC (GMT+0)** based on your topic, audience, and content type.")
 else:
     st.title("⏱️ مُحلّل توقيت الـ Viral (بتوقيت UTC)")
-    st.caption("تحديد أفضل نافذة نشر **بتوقيت UTC (GMT+0)** حسب موضوعك وجمهورك ونوع المحتوى.")
+    st.caption("تحديد أفضل وقت نشر **بتوقيت UTC (GMT+0)** حسب موضوعك وجمهورك ونوع المحتوى.")
 
 with st.expander("💡 What is this tool?" if IS_EN else "💡 ما هي هذه الأداة؟", expanded=True):
     if IS_EN:
@@ -348,15 +376,7 @@ This tool helps you pick a **best posting window (in UTC)** based on:
 It does **not** promise virality.
 It gives a **smart starting point** (timing hypothesis) + a short plan to validate it.
 
-**Example input:**
-- Topic: A long post about building AI tools in public for 30 days
-- Audience: AI builders & creators
-- Type: LinkedIn long post
 
-**Example output:**
-- Best window: Tue–Thu, 16:00–18:00 UTC
-- Why: overlaps work breaks in Europe + late afternoon US
-- Tips: test 2–3 time windows, track saves/comments, keep topic constant
 """)
     else:
         st.markdown("""
@@ -368,15 +388,6 @@ It gives a **smart starting point** (timing hypothesis) + a short plan to valida
 هي **ما بتوعدك بالـ viral**،
 بس بتعطيك **نقطة بداية ذكية** (فرضية توقيت) + طريقة بسيطة تتأكدي منها بالتجربة.
 
-**مثال مدخلات:**
-- الموضوع: فقرة طويلة عن رحلتك ببناء أدوات ذكاء اصطناعي لمدة 30 يوم
-- الجمهور: AI builders وصناع محتوى
-- النوع: بوست طويل على لينكدإن
-
-**مثال مخرجات:**
-- أفضل نافذة: الثلاثاء–الخميس، 16:00–18:00 UTC
-- السبب: بتغطي استراحة شغل أوروبا + آخر دوام بأمريكا
-- نصائح: جرّبي 2–3 أوقات، راقبي الحفظ والتعليقات، وخلي المحتوى ثابت بالتجارب
 """)
 
 
@@ -386,7 +397,7 @@ if IS_EN:
     topic = st.text_area(
         "1) Topic / Post content (can be long):",
         height=200,
-        placeholder="Write a long paragraph about your AI journey, with details + questions...",
+        placeholder="Write the topic or paragraph you want to find the best posting time for...",
     )
     st.caption("Tip: paste the full paragraph. The tool will still output time in UTC.")
     audience = st.text_input(
@@ -408,7 +419,7 @@ else:
     topic = st.text_area(
         "1) الموضوع / نص المنشور (ممكن يكون طويل):",
         height=200,
-        placeholder="اكتب فقرة طويلة عميقة عن مشوارك بالذكاء الاصطناعي مع أسئلة وتفاصيل...",
+        placeholder="اكتب موضوع المنشور أو الفقرة التي تريد معرفة أفضل وقت لنشرها...",
     )
     st.caption("ملاحظة: النتيجة رح تطلع بتوقيت UTC (GMT+0).")
     audience = st.text_input(
@@ -425,7 +436,7 @@ else:
             "بودكاست",
         ),
     )
-    btn_label = "🚀 تحليل أفضل وقت (UTC)"
+    btn_label = "🚀 تحليل أفضل وقت "
 
 
 # =========================================================
@@ -588,3 +599,4 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
