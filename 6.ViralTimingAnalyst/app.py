@@ -163,12 +163,15 @@ h1, h2, h3, h4, h5, h6, p, div, span, label, li,
 
 /* ===== Result Card ===== */
 .result-card {{
-    margin-top: 18px;
+    mmargin-top: 18px;
     padding: 22px;
     border-radius: 14px;
-    background: #fff7ed !important;
-    border-right: 8px solid #f97316 !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.12) !important;
+    background: #fff7ed;
+    border-right: 8px solid #f97316;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+
+    /* ✅ هذا هو الإصلاح */
+    color: #111111 !important;
 }}
 
 .result-title {{
@@ -400,7 +403,7 @@ It gives a **smart starting point** (timing hypothesis) + a short plan to valida
 - نوع المحتوى (بوست طويل/فيديو قصير/…).
 
 هي **ما بتوعدك بالـ viral**،
-بس بتعطيك **نقطة بداية ذكية** (فرضية توقيت) + طريقة بسيطة تتأكدي منها بالتجربة.
+بس بتعطيك **نقطة بداية ذكية** (فرضية توقيت) + طريقة بسيطة تتأكد منها بالتجربة.
 
 """)
 
@@ -511,7 +514,7 @@ if st.session_state.get("has_result") and st.session_state.get("timing_res"):
   </div>
 
   <div class="result-title" style="margin-top:16px;">
-    {"How to validate quickly" if IS_EN else "كيف تتأكدي بسرعة؟"}
+    {"How to validate quickly" if IS_EN else "كيف تتأكد بسرعة؟"}
   </div>
   <div>
     {"".join([f"<div>• {x}</div>" for x in (data.get("TipsToValidate", []) or [])]) or "—"}
@@ -613,6 +616,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
