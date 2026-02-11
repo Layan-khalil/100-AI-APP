@@ -493,7 +493,7 @@ if st.session_state.get("has_result") and st.session_state.get("timing_res"):
   </div>
 
   <div class="result-title" style="margin-top:16px;">
-    {"Why this timing?" if IS_EN else "ليش هذا التوقيت؟"}
+    {"Why this timing?" if IS_EN else "لماذا هذا التوقيت؟"}
   </div>
   <div>{data.get("WhyThisTiming", "—")}</div>
 
@@ -607,6 +607,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
