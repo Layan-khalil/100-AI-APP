@@ -173,16 +173,23 @@ h1, h2, h3, h4, h5, h6, p, div, span, label, li,
     margin-bottom: 10px;
 }}
 
-.time-pill {{
-     background-color: #fef3c7;
-    color: #111111 !important;   /* ✅ النص أسود */
-    padding: 15px;
-    border-radius: 8px;
-    font-size: 1.2em;
+.time-pill {<
+    background-color: #fef3c7;
+    color: #111111 !important;
+    padding: 14px;
+    border-radius: 10px;
     font-weight: 700;
-    margin-top: 20px;
-    text-align: center !important;
+    text-align: center;
     border: 2px solid #fcd34d;
+}}
+
+/* مهم جداً — يكسر أي لون موروث من Streamlit */
+.time-pill,
+.time-pill div,
+.time-pill span,
+.time-pill p,
+.time-pill strong {{
+    color: #111111 !important;
 }}
 
 .footer-container {{
@@ -422,7 +429,7 @@ else:
         height=200,
         placeholder="اكتب موضوع المنشور أو الفقرة التي تريد معرفة أفضل وقت لنشرها...",
     )
-    st.caption("ملاحظة: النتيجة رح تطلع بتوقيت UTC (GMT+0).")
+    st.caption("ملاحظة: النتيجة ستظهر بتوقيت UTC (GMT+0).")
     audience = st.text_input(
         "2) الجمهور (اختياري):",
         placeholder="مثال: صناع محتوى، مؤسسين، طلاب، AI builders",
@@ -600,5 +607,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
