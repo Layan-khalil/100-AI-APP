@@ -68,6 +68,18 @@ ALIGN = "left" if IS_EN else "right"
 
 st.markdown(f"""
 <style>
+
+/* Hide Streamlit chrome (header/top bar/footer badges) */
+#MainMenu {{ visibility: hidden; }}
+header {{ visibility: hidden; }}
+footer {{ visibility: hidden; }}
+div[data-testid="stToolbar"] {{ visibility: hidden; }}
+div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
+div[data-testid="stDecoration"] {{ visibility: hidden; }}
+div[class*="viewerBadge_container"] {{ display: none !important; }}
+div[class*="viewerBadge_link"] {{ display: none !important; }}
+div[class*="viewerBadge_text"] {{ display: none !important; }}
+
 html, body, [data-testid="stAppViewContainer"], .main {{
     direction: {DIR} !important;
     text-align: {ALIGN} !important;
@@ -130,29 +142,25 @@ ol li, ul li {{
     margin-right: 0 !important;
     padding-right: 0 !important;
 }}
-
-/* الفوتر */
+/* Footer always RTL like your tools */
 .footer-container {{
     width: 100%;
     text-align: center;
-    margin-top: 40px;
-    padding-top: 16px;
+    margin-top: 45px;
+    padding-top: 20px;
     border-top: 1px solid #666;
     font-size: 13px;
     display: flex;
     justify-content: center;
     gap: 6px;
     flex-wrap: wrap;
+    direction: rtl !important;
 }}
-.footer-container .rtl-text {{
-    direction: rtl;
-    unicode-bidi: plaintext;
-    font-weight: 600;
+.footer-container, .footer-container * {{
+    direction: rtl !important;
+    text-align: center !important;
 }}
-.footer-container .ltr-text {{
-    direction: ltr;
-    unicode-bidi: plaintext;
-}}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -592,9 +600,10 @@ if st.session_state.get(f"{APP_ID}_has_result"):
 st.markdown(
     """
 <div class="footer-container">
-  <span class="rtl-text">جميع الحقوق محفوظة © 2026 |</span>
-  <span class="ltr-text">AI Product Builder - Layan Khalil</span>
+  <span>جميع الحقوق محفوظة © 2026 |</span>
+  <span>AI Product Builder - Layan Khalil</span>
 </div>
 """,
     unsafe_allow_html=True,
 )
+
