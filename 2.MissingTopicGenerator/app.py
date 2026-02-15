@@ -1,8 +1,9 @@
-
 import streamlit as st
 import uuid
 import hashlib
 import os
+import time
+import re
 import pandas as pd
 
 from supabase import create_client, Client
@@ -10,39 +11,47 @@ from google import genai
 from google.genai import types
 
 # =========================================================
-# 0) إعداد الصفحة (RTL + Wide)
+# 0) Page config
 # =========================================================
 st.set_page_config(
-    page_title=" منشئ المحتوى المفقود",
+    page_title="منشئ المحتوى المفقود",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # =========================================================
-# 1) تحميل المفاتيح (Secrets / Env) وتهيئة العملاء
+# 1) Language switch
+# =========================================================
+if "ui_lang" not in st.session_state:
+    st.session_state["ui_lang"] = "AR"
+
+lang_choice = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
+st.session_state["ui_lang"] = "EN" if lang_choice else "AR"
+IS_EN = (st.session_state["ui_lang"] == "EN")
+
+DIR = "ltr" if IS_EN else "rtl"
+ALIGN = "left" if IS_EN else "right"
+
+# =========================================================
+# 2) Secrets / Env + Clients
 # =========================================================
 def get_secret(key: str):
-    """يحاول قراءة القيمة من st.secrets ثم من متغيرات البيئة."""
     if key in st.secrets:
         return st.secrets[key]
     return os.environ.get(key)
-
 
 SUPABASE_URL = get_secret("SUPABASE_URL")
 SUPABASE_KEY = get_secret("SUPABASE_KEY")
 GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY")
 
 missing = []
-if not SUPABASE_URL:
-    missing.append("SUPABASE_URL")
-if not SUPABASE_KEY:
-    missing.append("SUPABASE_KEY")
-if not GOOGLE_API_KEY:
-    missing.append("GOOGLE_API_KEY")
+if not SUPABASE_URL: missing.append("SUPABASE_URL")
+if not SUPABASE_KEY: missing.append("SUPABASE_KEY")
+if not GOOGLE_API_KEY: missing.append("GOOGLE_API_KEY")
 
 if missing:
     st.error(
-        "⚠️ القيم التالية غير موجودة في Secrets أو Environment Variables:\n\n"
+        ("⚠️ Missing secrets/env vars:\n\n" if IS_EN else "⚠️ القيم التالية غير موجودة في Secrets أو Environment Variables:\n\n")
         + "\n".join(f"• {m}" for m in missing)
     )
     st.stop()
@@ -53,94 +62,78 @@ genai_client = genai.Client(api_key=GOOGLE_API_KEY)
 APP_ID = "missing-topic-generator"
 
 # =========================================================
-# 2) CSS — RTL + Responsive + Button + Footer + جدول
+# 3) CSS — match your style
 # =========================================================
 st.markdown(
-    """
+    f"""
 <style>
-html, body, [data-testid="stAppViewContainer"], .main {
-    direction: rtl !important;
-    text-align: right !important;
-    font-family: "Cairo", sans-serif;
-}
+/* Hide Streamlit chrome */
+#MainMenu {{ visibility: hidden; }}
+footer {{ visibility: hidden; }}
+header {{ visibility: hidden; }}
+div[data-testid="stToolbar"] {{ visibility: hidden; }}
+div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
+div[data-testid="stDecoration"] {{ visibility: hidden; }}
+div[class*="viewerBadge_container"] {{ display: none !important; }}
+div[class*="viewerBadge_link"] {{ display: none !important; }}
+div[class*="viewerBadge_text"] {{ display: none !important; }}
 
-/* حاوية عامة لو احتجناها */
-.app-container {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 0 14px;
-}
+html, body, [data-testid="stAppViewContainer"], .main {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    font-family: "Cairo", sans-serif !important;
+}}
 
-/* الأزرار */
-.stButton > button {
+h1, h2, h3, h4, h5, h6 {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+}}
+
+p, div, span, label, li, [data-testid="stMarkdownContainer"] {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    unicode-bidi: plaintext !important;
+    line-height: 1.8 !important;
+    word-break: break-word;
+}}
+
+[data-testid="stExpander"] * {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    unicode-bidi: plaintext !important;
+}}
+
+.stButton > button {{
     background-color: #e63946 !important;
     color: #ffffff !important;
-    font-weight: 800;
-    border-radius: 28px;
-    border: none;
-    padding: 10px 20px;
-    height: 3em;
-    width: 100%;
-    font-size: 17px;
-    transition: 0.2s ease-in-out;
-}
-.stButton > button:hover {
+    font-weight: 800 !important;
+    border-radius: 28px !important;
+    border: none !important;
+    padding: 10px 20px !important;
+    height: 3.1em !important;
+    width: 100% !important;
+    font-size: 17px !important;
+    transition: 0.2s ease-in-out !important;
+}}
+.stButton > button:hover {{
     background-color: #c82333 !important;
     transform: scale(1.01);
-}
+}}
 
-/* العناوين */
-h1, h2, h3, h4, h5, h6 {
-    direction: rtl !important;
-    text-align: right !important;
-}
+[data-testid="stDataFrame"] table {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+}}
+[data-testid="stDataFrame"] table thead tr th {{
+    text-align: {ALIGN} !important;
+}}
+[data-testid="stDataFrame"] table tbody tr td {{
+    text-align: {ALIGN} !important;
+}}
 
-/* النصوص العامة */
-p, div {
-    direction: rtl !important;
-    text-align: right !important;
-    line-height: 1.9;
-}
-
-/* القوائم */
-ol, ul {
-    direction: rtl !important;
-    text-align: right !important;
-    list-style-position: inside !important;
-    padding-right: 0 !important;
-    margin-right: 0 !important;
-}
-ol li, ul li {
-    margin: 4px 0;
-    padding-right: 4px;
-}
-
-/* الجدول RTL */
-[data-testid="stDataFrame"] table {
-    direction: rtl !important;
-    text-align: right !important;
-}
-[data-testid="stDataFrame"] table thead tr th {
-    text-align: right !important;
-}
-[data-testid="stDataFrame"] table tbody tr td {
-    text-align: right !important;
-}
-
-/* الموبايل */
-@media (max-width: 600px) {
-    .app-container {
-        padding: 0 10px;
-    }
-    li {
-        line-height: 2.1;
-    }
-}
-
-/* الفوتر */
-.footer-container {
+.footer-container {{
     width: 100%;
-    text-align: center;
+    text-align: center !important;
     margin-top: 40px;
     padding-top: 16px;
     border-top: 1px solid #666;
@@ -149,71 +142,58 @@ ol li, ul li {
     justify-content: center;
     gap: 6px;
     flex-wrap: wrap;
-}
-.footer-container .rtl-text {
+}}
+.footer-container .rtl-text {{
     direction: rtl;
     unicode-bidi: plaintext;
     font-weight: 600;
-}
-.footer-container .ltr-text {
+}}
+.footer-container .ltr-text {{
     direction: ltr;
     unicode-bidi: plaintext;
-}
+}}
 </style>
 """,
     unsafe_allow_html=True,
 )
 
 # =========================================================
-# 3) دوال التتبع (نفس نمط التطبيق الأول)
+# 4) Tracking (visit + CTA)
 # =========================================================
 def get_session_visitor_id() -> str:
-    """توليد/استرجاع معرف الزائر داخل جلسة Streamlit."""
     if "visitor_id" not in st.session_state:
         st.session_state["visitor_id"] = str(uuid.uuid4())
     return st.session_state["visitor_id"]
 
-
 def track_visit():
-    """تسجيل زيارة في Supabase (analytics + visitor_logs)."""
     visitor_id = get_session_visitor_id()
     try:
-        supabase.rpc(
-            "track_visit",
-            {"p_app_id": APP_ID, "p_visitor_id": visitor_id},
-        ).execute()
-    except Exception as e:
-        print(f"[track_visit] Error: {e}")
-
+        supabase.rpc("track_visit", {"p_app_id": APP_ID, "p_visitor_id": visitor_id}).execute()
+    except Exception:
+        pass
 
 def track_cta_event():
-    """زيادة عداد CTA في analytics عند الضغط على زر التحليل."""
     try:
         supabase.rpc("increment_cta", {"p_app_id": APP_ID}).execute()
-    except Exception as e:
-        print(f"[increment_cta] Error: {e}")
+    except Exception:
+        pass
 
-
-track_visit()  # تشغيل التتبع بمجرد فتح التطبيق
+track_visit()
 
 # =========================================================
-# 4) كاش + دوال مساعدة لتنسيق الرد
+# 5) Caching helpers
 # =========================================================
 def get_content_hash(text: str) -> str:
-    """هاش ثابت يجمع منشوراتك + منشورات المنافسين."""
     normalized = " ".join(text.strip().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
-
 def parse_gap_response(raw: str):
     """
-    نتوقّع فورمات على الشكل:
-
-    SUMMARY: نص الملخص...
-
+    Expect EXACT format:
+    SUMMARY: ...
     TOPICS:
-    1. عنوان || السبب || الشكل
-    2. ...
+    1. title || reason || format
+    ...
     """
     if not raw:
         return "", []
@@ -221,15 +201,13 @@ def parse_gap_response(raw: str):
     lines = [l.strip() for l in raw.splitlines() if l.strip()]
     summary = ""
     topics = []
-
     in_topics = False
+
     for line in lines:
-        # سطر الملخص
-        if line.upper().startswith("SUMMARY:") or line.startswith("ملخص:"):
+        if line.upper().startswith("SUMMARY:"):
             summary = line.split(":", 1)[1].strip()
             continue
 
-        # بداية قائمة المواضيع
         if line.upper().startswith("TOPICS"):
             in_topics = True
             continue
@@ -237,89 +215,122 @@ def parse_gap_response(raw: str):
         if not in_topics:
             continue
 
-        # نتوقع: "1. العنوان || السبب || الشكل"
-        if line[0].isdigit() and "." in line:
-            try:
-                after_dot = line.split(".", 1)[1].strip()
-                parts = [p.strip(" |") for p in after_dot.split("||")]
-                if len(parts) >= 3:
-                    topics.append(
-                        {
-                            "topic_title": parts[0],
-                            "gap_reason": parts[1],
-                            "format_suggestion": parts[2],
-                        }
-                    )
-            except Exception:
-                continue
+        m = re.match(r"^\d+\.\s*(.*)$", line)
+        if not m:
+            continue
+
+        after_dot = m.group(1).strip()
+        parts = [p.strip(" |") for p in after_dot.split("||")]
+        if len(parts) >= 3:
+            topics.append(
+                {
+                    "topic_title": parts[0],
+                    "gap_reason": parts[1],
+                    "format_suggestion": parts[2],
+                }
+            )
 
     return summary, topics
 
-
-def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
-    """
-    - يحاول قراءة النتيجة من جدول viral_scores_cache
-    - إذا لم يجدها → يستدعي Gemini ويحفظ النتيجة في الكاش
-    - يرجع (summary, topics_list)
-    """
-    combined = my_posts.strip() + "\n\n---\n\n" + competitor_posts.strip()
-    content_hash = get_content_hash(combined)
-
-    # 1) قراءة الكاش
+def cache_read(app_id: str, content_hash: str):
     try:
         res = (
             supabase.table("viral_scores_cache")
             .select("analysis_text")
-            .eq("app_id", APP_ID)
+            .eq("app_id", app_id)
             .eq("content_hash", content_hash)
             .limit(1)
             .execute()
         )
         if res.data and len(res.data) > 0:
-            raw = res.data[0]["analysis_text"]
-            summary, topics = parse_gap_response(raw)
-            if topics:
-                return summary, topics
-    except Exception as e:
-        print(f"[cache read] Error: {e}")
+            return res.data[0].get("analysis_text") or ""
+    except Exception:
+        pass
+    return ""
 
-    # 2) لا يوجد كاش → استدعاء Gemini
-    raw = analyze_content_gaps(my_posts, competitor_posts)
-    if not raw:
-        return "", []
-
-    summary, topics = parse_gap_response(raw)
-
-    # 3) حفظ في الكاش (النص الخام)
+def cache_write(app_id: str, content_hash: str, analysis_text: str):
     try:
         supabase.table("viral_scores_cache").insert(
-            {
-                "app_id": APP_ID,
-                "content_hash": content_hash,
-                "analysis_text": raw,
-            }
+            {"app_id": app_id, "content_hash": content_hash, "analysis_text": analysis_text}
         ).execute()
-    except Exception as e:
-        print(f"[cache write] Error: {e}")
-
-    return summary, topics
-
+    except Exception:
+        pass
 
 # =========================================================
-# 5) استدعاء Gemini بفورمات نصي بسيط (بدون JSON)
+# 6) Model call with retry + candidates (No 404 crash)
 # =========================================================
-def analyze_content_gaps(my_posts, competitor_posts) -> str:
-    """
-    يطلب من Gemini تحليل الفجوات ويعيد نصًا منسقًا (SUMMARY + TOPICS).
-    """
+MODEL_CANDIDATES = [
+    # Try newer first, then fallback
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+]
 
-    prompt = f"""
-أنت خبير استراتيجي في المحتوى التسويقي متخصص في تحليل فجوات المحتوى (Content Gaps).
+def call_model_with_retry(prompt: str, cfg: types.GenerateContentConfig, retries: int = 3):
+    last_err = None
+    for model_name in MODEL_CANDIDATES:
+        for attempt in range(retries):
+            try:
+                resp = genai_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=cfg,
+                )
+                txt = (resp.text or "").strip()
+                if txt:
+                    return txt, model_name
+                last_err = RuntimeError("Empty response")
+            except Exception as e:
+                last_err = e
+                time.sleep(1.2 * (attempt + 1))
+                continue
+        # move to next model candidate
+    raise last_err if last_err else RuntimeError("Unknown model error")
+
+# =========================================================
+# 7) Gemini prompt (simple text output, no JSON)
+# =========================================================
+def analyze_content_gaps(my_posts: str, competitor_posts: str) -> str:
+    if IS_EN:
+        prompt = f"""
+You are a content strategy expert specializing in Content Gap analysis.
+
+Task:
+- Compare "Client posts" vs "Competitor posts"
+- Extract 5 to 7 missing topics that the audience expects, but the client isn't covering well
+- Focus on topics suitable for an AI/product builder/creator/freelancer in business + AI
+
+Client posts:
+{my_posts}
+
+Competitor posts:
+{competitor_posts}
+
+Return EXACTLY this format (no markdown, no extra text):
+
+SUMMARY: Write a 1-2 sentence summary describing the gap between the client's content and competitors, and what the client is missing.
+TOPICS:
+1. Missing topic title || Why this is a valuable gap for the audience (tie it to what client posts vs competitors) || Best format (Reel, carousel, live, thread, etc.)
+2. ...
+3. ...
+4. ...
+5. ...
+6. (if needed)
+7. (if needed)
+
+Rules:
+- TOPICS count must be 5 to 7
+- Keep it clear, direct, practical
+- Do not add anything before SUMMARY or after the last topic line
+"""
+    else:
+        prompt = f"""
+أنت خبير استراتيجي محتوى متخصص في تحليل فجوات المحتوى (Content Gaps).
 
 مهمتك:
-- مقارنة قائمة منشورات "العميل" مع قائمة منشورات "المنافسين".
-- استخراج 5 إلى 7 مواضيع مهمة للجمهور لم يتم تغطيتها جيداً أو تم تجاهلها.
-- التركيز على المواضيع التي تناسب صانع محتوى/مستقل/ريادي في مجال الأعمال الرقمية والذكاء الاصطناعي.
+- مقارنة قائمة منشورات "العميل" مع قائمة منشورات "المنافسين"
+- استخراج 5 إلى 7 مواضيع مهمة للجمهور لم يتم تغطيتها جيداً أو تم تجاهلها
+- التركيز على المواضيع المناسبة لصانع محتوى/مستقل/ريادي في مجال الأعمال الرقمية والذكاء الاصطناعي
 
 قائمة منشورات العميل:
 {my_posts}
@@ -330,10 +341,9 @@ def analyze_content_gaps(my_posts, competitor_posts) -> str:
 أعد النتيجة بالصيغة التالية تماماً، بدون أي شروح إضافية أو Markdown أو كود:
 
 SUMMARY: اكتب هنا ملخصاً تحليلياً من سطرين كحد أقصى يوضح الفرق بين نمط محتوى العميل والمنافسين، وما نوع المواضيع التي تنقص استراتيجية العميل حالياً.
-
 TOPICS:
 1. عنوان موضوع مفقود مقترح || شرح مختصر لماذا يعتبر هذا الموضوع فجوة مهمة للجمهور (مع ربطه بما ينشره العميل وما يهمله المنافسون) || اقتراح الشكل الأنسب للمحتوى (مثل: ريلز قصير، كروسيل، لايف، ثريد...)
-2. عنوان موضوع ثانٍ || ... || ...
+2. ...
 3. ...
 4. ...
 5. ...
@@ -341,113 +351,177 @@ TOPICS:
 7. (إن لزم)
 
 احرص على:
-- أن يكون عدد البنود في قائمة TOPICS بين 5 و 7.
-- أن تكون اللغة عربية واضحة ومقنعة ومباشرة.
-- عدم إضافة أي نص قبل كلمة SUMMARY أو بعد آخر سطر من المواضيع.
+- أن يكون عدد البنود في TOPICS بين 5 و 7
+- أن تكون اللغة عربية واضحة ومقنعة ومباشرة
+- عدم إضافة أي نص قبل SUMMARY أو بعد آخر سطر من المواضيع
 """
+
+    cfg = types.GenerateContentConfig(
+        temperature=0.3,
+        top_p=0.85,
+        top_k=32,
+        max_output_tokens=1400,
+    )
 
     try:
-        response = genai_client.models.generate_content(
-            model="gemini-2.0-flash-exp",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                top_p=0.8,
-                top_k=32,
-                max_output_tokens=1200,
-            ),
-        )
+        text, used_model = call_model_with_retry(prompt, cfg, retries=3)
+        return text
     except Exception as e:
-        st.error(f"حدث خطأ أثناء الاتصال بمحرك التحليل: {e}")
+        st.error(("Model/API error: " if IS_EN else "خطأ في الاتصال أو الموديل: ") + str(e))
         return ""
 
-    return response.text or ""
+def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
+    combined = f"{st.session_state['ui_lang']}||{my_posts.strip()}||---||{competitor_posts.strip()}"
+    content_hash = get_content_hash(combined)
 
+    cached = cache_read(APP_ID, content_hash)
+    if cached:
+        summary, topics = parse_gap_response(cached)
+        if topics:
+            return summary, topics, True
+
+    raw = analyze_content_gaps(my_posts, competitor_posts)
+    if not raw:
+        return "", [], False
+
+    summary, topics = parse_gap_response(raw)
+    if topics:
+        cache_write(APP_ID, content_hash, raw)
+
+    return summary, topics, False
 
 # =========================================================
-# 6) واجهة المستخدم
+# 8) UI
 # =========================================================
-st.title("🧩 منشئ المحتوى المفقود")
-st.caption("حلّل منشوراتك ومنشورات منافسيك لاكتشاف المواضيع التي يتوقعها جمهورك ولم تُغطَّ بعد.")
+st.title("🧩 " + ("Missing Topic Generator" if IS_EN else "منشئ المحتوى المفقود"))
+st.caption(
+    "Analyze your posts vs competitors to discover missing content topics."
+    if IS_EN
+    else "حلّل منشوراتك ومنشورات منافسيك لاكتشاف المواضيع التي يتوقعها جمهورك ولم تُغطَّ بعد."
+)
 
-with st.expander("ℹ️ ما الذي تفعله هذه الأداة؟", expanded=True):
-    st.markdown(
-        """
+with st.expander("ℹ️ " + ("What does this tool do?" if IS_EN else "ما الذي تفعله هذه الأداة؟"), expanded=True):
+    if IS_EN:
+        st.markdown("""
+This tool helps you find **Content Gaps** between:
+- What you post (titles / summaries)
+- What competitors post in the same niche
+
+You will get:
+- ✅ 5–7 missing topic ideas that make sense for your audience  
+- ✅ Why each topic matters (the gap explanation)  
+- ✅ Best format suggestion (Reel / carousel / live / thread)
+
+**Example input:**
+Client:
+1) Building 100 AI tools in 100 days  
+2) Lessons from shipping Streamlit apps  
+Competitors:
+1) How to get your first client  
+2) Positioning & pricing for freelancers  
+3) Content strategy frameworks
+
+**Example output:**
+A list of missing topics like: pricing, positioning, case studies, content distribution, etc.
+""")
+    else:
+        st.markdown("""
 هذه الأداة تساعدك على تحليل فجوات المحتوى (**Content Gaps**) بين:
+- ما تنشره أنت حالياً (عناوين/ملخصات)
+- وما ينشره منافسوك في نفس السوق أو النيتش
 
-- ما تنشره أنت حالياً (بوستات، ريلز، فيديوهات، مقالات…)
-- وما ينشره منافسوك في نفس السوق أو النيتش.
+ستحصلين على:
+- ✅ 5–7 مواضيع مفقودة (جاهزة للنشر)
+- ✅ سبب مهم لكل موضوع ولماذا هو فجوة حالياً
+- ✅ اقتراح أفضل شكل محتوى (ريلز / كروسيل / لايف / ثريد…)
 
-النتيجة النهائية هي:
-- 🧠 مواضيع مهمّة لم تتناولها بعد، لكنها منطقية جداً لشخص مثلك.
-- 🎯 أسباب تجعل هذه المواضيع جذابة ومطلوبة من جمهورك.
-- 🎬 اقتراحات واضحة لأفضل صيغة نشر لكل موضوع (ريلز، كروسيل، لايف، ثريد…).
+**مثال سريع للمدخلات:**
+منشوراتك:
+1) تحدي 100 أداة AI  
+2) دروس من نشر تطبيقات Streamlit  
+المنافسون:
+1) كيف تحصل على أول عميل  
+2) التسعير والتموضع  
+3) استراتيجيات المحتوى
 
-الهدف: أن تخرجي من الأداة بقائمة جاهزة من أفكار محتوى **استراتيجية** بدلاً من نشر عشوائي.
-"""
-    )
+**المخرجات:**
+قائمة مواضيع مفقودة مثل: التسعير، التموضع، دراسات حالة، توزيع المحتوى… إلخ.
+""")
 
 col1, col2 = st.columns(2)
 
+if IS_EN:
+    my_ph = "Example:\n1. Building 100 AI tools\n2. Lessons from Streamlit\n3. My freelancing mistakes...\n"
+    comp_ph = "Example:\n1. Getting first client\n2. Pricing & positioning\n3. LinkedIn growth strategy...\n"
+else:
+    my_ph = "مثال:\n1. رحلتي مع بناء 100 تطبيق ذكاء اصطناعي\n2. دروس من نشر تطبيقات Streamlit\n3. أخطائي الأولى مع العملاء...\n"
+    comp_ph = "مثال:\n1. كيف تحصل على أول عميل\n2. التسعير وبناء عرض قوي\n3. بناء براند شخصي على LinkedIn...\n"
+
 with col1:
     my_posts_input = st.text_area(
-        "✍️ منشوراتك / محتوياتك الأخيرة (العناوين أو الملخصات):",
-        height=260,
-        placeholder="مثال:\n"
-        "1. رحلتي مع بناء 100 تطبيق ذكاء اصطناعي\n"
-        "2. كيف أتعلم البرمجة من الصفر\n"
-        "3. عادات يومية رفعت إنتاجيتي في العمل الحر\n"
-        "4. أخطائي الأولى مع العملاء وكيف تفاديتها...\n",
+        "✍️ " + ("Your recent posts (titles/summaries):" if IS_EN else "منشوراتك / محتوياتك الأخيرة (العناوين أو الملخصات):"),
+        height=280,
+        placeholder=my_ph,
+        key="my_posts",
     )
 
 with col2:
     competitor_posts_input = st.text_area(
-        "📌 منشورات المنافسين الأخيرة (العناوين أو الملخصات):",
-        height=260,
-        placeholder="مثال:\n"
-        "1. كيف تحصل على أول عميل على Upwork\n"
-        "2. أفضل أدوات الذكاء الاصطناعي لصنّاع المحتوى\n"
-        "3. خطوات بناء براند شخصي قوي على LinkedIn\n"
-        "4. استراتيجيات تسويق بالمحتوى لرواد الأعمال...\n",
+        "📌 " + ("Competitors recent posts (titles/summaries):" if IS_EN else "منشورات المنافسين الأخيرة (العناوين أو الملخصات):"),
+        height=280,
+        placeholder=comp_ph,
+        key="comp_posts",
     )
 
-analyze_button = st.button("🎯 تحليل الفجوات واقتراح المواضيع")
+btn = st.button("🎯 " + ("Analyze gaps & generate topics" if IS_EN else "تحليل الفجوات واقتراح المواضيع"))
 
 # =========================================================
-# 7) تنفيذ التحليل وعرض النتائج
+# 9) Run analysis + Results
 # =========================================================
-if analyze_button:
+if btn:
     if not my_posts_input.strip() or not competitor_posts_input.strip():
-        st.warning("يرجى إدخال منشوراتك ومنشورات منافسيك أولاً.")
+        st.warning("Please add both sides first." if IS_EN else "يرجى إدخال منشوراتك ومنشورات منافسيك أولاً.")
     elif len(my_posts_input.strip()) < 50 or len(competitor_posts_input.strip()) < 50:
-        st.warning("للحصول على تحليل دقيق، يُفضّل إدخال وصف أو عناوين كافية (50 حرفاً على الأقل لكل جانب).")
+        st.warning(
+            "For better results, add more text (50+ chars each)."
+            if IS_EN
+            else "للحصول على تحليل أدق، يُفضّل إدخال وصف/عناوين كافية (50 حرفاً على الأقل لكل جانب)."
+        )
     else:
-        # تسجيل ضغطة الزر في analytics
         track_cta_event()
+        with st.spinner("Analyzing..." if IS_EN else "🔎 جاري تحليل الفجوات واستخراج المواضيع..."):
+            summary, topics, was_cached = get_or_create_gap_analysis(my_posts_input, competitor_posts_input)
 
-        with st.spinner("🔎 جاري تحليل الفجوات واستخراج المواضيع الاستراتيجية..."):
-            summary, topics = get_or_create_gap_analysis(
-                my_posts_input, competitor_posts_input
-            )
+        st.session_state["has_result"] = True
+        st.session_state["summary"] = summary
+        st.session_state["topics"] = topics
+        st.session_state["was_cached"] = was_cached
 
-        if not topics:
-            st.error("حدثت مشكلة في الحصول على نتيجة التحليل. جرّبي تعديل المدخلات أو إعادة المحاولة لاحقاً.")
-        else:
-            st.subheader("📌 ملخّص النمط العام للمحتوى")
-            if summary:
-                st.markdown(summary)
-            else:
-                st.markdown("لم يتم توليد ملخص واضح من النموذج.")
+if st.session_state.get("has_result") and st.session_state.get("topics"):
+    summary = st.session_state.get("summary", "")
+    topics = st.session_state.get("topics", [])
+    was_cached = st.session_state.get("was_cached", False)
 
-            st.markdown("---")
-            st.subheader("🧩 قائمة المواضيع المفقودة (Missing Topics)")
+    st.subheader("📌 " + ("Summary" if IS_EN else "ملخّص النمط العام للمحتوى"))
+    st.markdown(summary if summary else ("No summary generated." if IS_EN else "لم يتم توليد ملخص واضح."))
 
-            df = pd.DataFrame(topics)
-            df.columns = ["الموضوع المقترح", "سبب الأهمية والفجوة", "اقتراح شكل المحتوى"]
-            st.dataframe(df, use_container_width=True)
+    if was_cached:
+        st.caption("⚡ Loaded from cache" if IS_EN else "⚡ تم جلب النتيجة من الكاش")
+
+    st.markdown("---")
+    st.subheader("🧩 " + ("Missing Topics" if IS_EN else "قائمة المواضيع المفقودة"))
+
+    df = pd.DataFrame(topics)
+
+    if IS_EN:
+        df.columns = ["Suggested topic", "Why it matters", "Best content format"]
+    else:
+        df.columns = ["الموضوع المقترح", "سبب الأهمية والفجوة", "اقتراح شكل المحتوى"]
+
+    st.dataframe(df, use_container_width=True)
 
 # =========================================================
-# 8) الفوتر
+# 10) Footer (same style)
 # =========================================================
 st.markdown(
     """
