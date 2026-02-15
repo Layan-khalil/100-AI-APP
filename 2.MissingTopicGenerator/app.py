@@ -220,15 +220,16 @@ def parse_gap_response(raw: str):
             continue
 
         after_dot = m.group(1).strip()
-        parts = [p.strip(" |") for p in after_dot.split("||")]
+        parts = [p.strip() for p in re.split(r"\s*\|\|\s*", after_dot)]
         if len(parts) >= 3:
-            topics.append(
-                {
-                    "topic_title": parts[0],
-                    "gap_reason": parts[1],
-                    "format_suggestion": parts[2],
-                }
-            )
+            title = parts[0]
+            reason = parts[1]
+            fmt = " || ".join(parts[2:])  # لو رجّع أكثر من 3 أجزاء
+            topics.append({
+           "topic_title": title,
+           "gap_reason": reason,
+           "format_suggestion": fmt,
+          })
 
     return summary, topics
 
@@ -401,25 +402,54 @@ TOPICS:
         st.error(("Model/API error: " if IS_EN else "خطأ في الاتصال أو الموديل: ") + str(e))
         return ""
 
-def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
-    combined = f"{st.session_state['ui_lang']}||{my_posts.strip()}||---||{competitor_posts.strip()}"
+def get_or_create_gap_analysis(my_posts, competitor_posts):
+
+    combined = my_posts.strip() + "\n\n---\n\n" + competitor_posts.strip()
     content_hash = get_content_hash(combined)
 
-    cached = cache_read(APP_ID, content_hash)
-    if cached:
-        summary, topics = parse_gap_response(cached)
-        if topics:
-            return summary, topics, True
+    # ===== قراءة الكاش =====
+    try:
+        res = (
+            supabase.table("viral_scores_cache")
+            .select("analysis_text")
+            .eq("app_id", APP_ID)
+            .eq("content_hash", content_hash)
+            .limit(1)
+            .execute()
+        )
 
+        if res.data and len(res.data) > 0:
+            raw = res.data[0]["analysis_text"]
+            summary, topics = parse_gap_response(raw)
+            return summary, topics   # ✅ يرجع قيمتين دائماً
+
+    except Exception as e:
+        print(e)
+
+    # ===== استدعاء الموديل =====
     raw = analyze_content_gaps(my_posts, competitor_posts)
+
     if not raw:
-        return "", [], False
+        return "", []   # ✅ هون تحطيها
 
     summary, topics = parse_gap_response(raw)
-    if topics:
-        cache_write(APP_ID, content_hash, raw)
 
-    return summary, topics, False
+    if not topics:
+        return "", []   # ✅ وهون أيضاً
+
+    # ===== حفظ الكاش =====
+    try:
+        supabase.table("viral_scores_cache").insert(
+            {
+                "app_id": APP_ID,
+                "content_hash": content_hash,
+                "analysis_text": raw,
+            }
+        ).execute()
+    except Exception:
+        pass
+
+    return summary, topics   # ✅ النهاية دائماً قيمتين
 
 # =========================================================
 # 8) UI
@@ -563,4 +593,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
