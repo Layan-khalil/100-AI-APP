@@ -115,7 +115,7 @@ def get_or_create_gap_analysis(my_posts, competitor_posts):
     
     try:
         response = genai_client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.4)
         )
@@ -174,3 +174,4 @@ if "res_sum" in st.session_state:
         st.error("لم يتم العثور على مواضيع واضحة، حاول إضافة تفاصيل أكثر.")
 
 st.markdown(f"<div style='text-align:center; padding:20px;'>جميع الحقوق محفوظة ©️ 2026 | Layan Khalil</div>", unsafe_allow_html=True)
+
