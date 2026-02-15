@@ -259,32 +259,63 @@ def cache_write(app_id: str, content_hash: str, analysis_text: str):
 # =========================================================
 # 6) Model call with retry + candidates (No 404 crash)
 # =========================================================
+# =========================================================
+# 7) Model selection (NO 404) + retry
+# =========================================================
 MODEL_CANDIDATES = [
-    # Try newer first, then fallback
-    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-2.0-flash-exp",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
 ]
 
-def call_model_with_retry(prompt: str, cfg: types.GenerateContentConfig, retries: int = 3):
+def get_working_model() -> str:
+    """
+    يجرّب موديلات معروفة ويختار أول موديل يشتغل فعلياً.
+    بيحفظ الاختيار في session_state لتجنب الفحص كل مرة.
+    """
+    if "working_model" in st.session_state:
+        return st.session_state["working_model"]
+
+    test_cfg = types.GenerateContentConfig(max_output_tokens=1, temperature=0)
+
+    for m in MODEL_CANDIDATES:
+        try:
+            _ = genai_client.models.generate_content(
+                model=m,
+                contents="ping",
+                config=test_cfg,
+            )
+            st.session_state["working_model"] = m
+            return m
+        except Exception:
+            continue
+
+    # إذا ما اشتغل ولا موديل (نادر)
+    st.session_state["working_model"] = MODEL_CANDIDATES[0]
+    return MODEL_CANDIDATES[0]
+
+def call_model_with_retry(prompt: str, cfg: types.GenerateContentConfig, retries: int = 3) -> str:
+    """
+    يستخدم موديل شغال 100% (get_working_model) + retries لأخطاء الضغط.
+    """
+    model_name = get_working_model()
     last_err = None
-    for model_name in MODEL_CANDIDATES:
-        for attempt in range(retries):
-            try:
-                resp = genai_client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=cfg,
-                )
-                txt = (resp.text or "").strip()
-                if txt:
-                    return txt, model_name
-                last_err = RuntimeError("Empty response")
-            except Exception as e:
-                last_err = e
-                time.sleep(1.2 * (attempt + 1))
-                continue
-        # move to next model candidate
+
+    for attempt in range(retries):
+        try:
+            resp = genai_client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=cfg,
+            )
+            text = (resp.text or "").strip()
+            if text:
+                return text
+            last_err = RuntimeError("Empty response")
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+
     raise last_err if last_err else RuntimeError("Unknown model error")
 
 # =========================================================
@@ -532,3 +563,4 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
