@@ -2,16 +2,16 @@ import streamlit as st
 import uuid
 import hashlib
 import os
-import time
 import re
 import pandas as pd
 
 from supabase import create_client, Client
 from google import genai
 from google.genai import types
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
 
 # =========================================================
-# 0) Page config
+# 0) PAGE CONFIG
 # =========================================================
 st.set_page_config(
     page_title="منشئ المحتوى المفقود",
@@ -20,158 +20,565 @@ st.set_page_config(
 )
 
 # =========================================================
-# 1) Language switch
+# 1) LANGUAGE SWITCH
 # =========================================================
 if "ui_lang" not in st.session_state:
     st.session_state["ui_lang"] = "AR"
 
-lang_choice = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
-st.session_state["ui_lang"] = "EN" if lang_choice else "AR"
+lang_toggle = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
+st.session_state["ui_lang"] = "EN" if lang_toggle else "AR"
 IS_EN = (st.session_state["ui_lang"] == "EN")
 
 DIR = "ltr" if IS_EN else "rtl"
 ALIGN = "left" if IS_EN else "right"
 
 # =========================================================
-# 2) Secrets & Clients
+# 2) SECRETS / CLIENTS
 # =========================================================
-SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY")
-GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+def get_secret(key: str):
+    return st.secrets.get(key) or os.environ.get(key)
+
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
+GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY")
 
 if not all([SUPABASE_URL, SUPABASE_KEY, GOOGLE_API_KEY]):
-    st.error("⚠️ Missing API Keys in Secrets.")
+    st.error("⚠️ Missing API keys in Secrets / Environment Variables." if IS_EN else "⚠️ مفاتيح الربط ناقصة في Secrets أو Environment Variables.")
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai_client = genai.Client(api_key=GOOGLE_API_KEY)
+
 APP_ID = "missing-topic-generator"
 
 # =========================================================
-# 3) Helper Functions (FIXED PARSING)
+# 3) MODEL (FLEXIBLE) + RETRY
 # =========================================================
+MODEL_CANDIDATES = [
+    "gemini-2.5-flash-001",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash",
+]
 
+def get_working_model():
+    if "working_model" in st.session_state:
+        return st.session_state["working_model"]
+
+    for m in MODEL_CANDIDATES:
+        try:
+            genai_client.models.generate_content(
+                model=m,
+                contents="test",
+                config=types.GenerateContentConfig(max_output_tokens=1),
+            )
+            st.session_state["working_model"] = m
+            return m
+        except Exception:
+            continue
+
+    st.session_state["working_model"] = MODEL_CANDIDATES[0]
+    return MODEL_CANDIDATES[0]
+
+def call_model_with_retry(model: str, prompt: str, cfg: types.GenerateContentConfig, retries: int = 3):
+    last_err = None
+    for attempt in range(retries):
+        try:
+            resp = genai_client.models.generate_content(model=model, contents=prompt, config=cfg)
+            return resp.text or ""
+        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
+            last_err = e
+        except Exception as e:
+            last_err = e
+            break
+    raise last_err if last_err else RuntimeError("Unknown model error")
+
+# =========================================================
+# 4) TRACKING (VISIT + CTA)
+# =========================================================
+def get_session_visitor_id() -> str:
+    if "visitor_id" not in st.session_state:
+        st.session_state["visitor_id"] = str(uuid.uuid4())
+    return st.session_state["visitor_id"]
+
+def track_visit():
+    try:
+        supabase.rpc("track_visit", {"p_app_id": APP_ID, "p_visitor_id": get_session_visitor_id()}).execute()
+    except Exception:
+        pass
+
+def track_cta_event():
+    try:
+        supabase.rpc("increment_cta", {"p_app_id": APP_ID}).execute()
+    except Exception:
+        pass
+
+track_visit()
+
+# =========================================================
+# 5) FEEDBACK RPC (نفس نمط أدواتك)
+# =========================================================
+def save_feedback_via_rpc(app_name, useful, missing_reason, problem_text, helpful_reason, must_use_text):
+    return supabase.rpc(
+        "submit_app_feedback",
+        {
+            "p_app_name": app_name,
+            "p_useful": useful,
+            "p_missing_reason": missing_reason,
+            "p_problem_text": problem_text,
+            "p_helpful_reason": helpful_reason,
+            "p_must_use_text": must_use_text,
+        },
+    ).execute()
+
+# =========================================================
+# 6) CACHING (viral_scores_cache)
+# =========================================================
 def get_content_hash(text: str) -> str:
-    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+    normalized = " ".join(text.strip().split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
+def cache_get(app_id: str, content_hash: str):
+    try:
+        res = (
+            supabase.table("viral_scores_cache")
+            .select("analysis_text")
+            .eq("app_id", app_id)
+            .eq("content_hash", content_hash)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            return res.data[0]["analysis_text"]
+    except Exception:
+        pass
+    return None
+
+def cache_set(app_id: str, content_hash: str, analysis_text: str):
+    try:
+        supabase.table("viral_scores_cache").insert(
+            {"app_id": app_id, "content_hash": content_hash, "analysis_text": analysis_text}
+        ).execute()
+    except Exception:
+        pass
+
+# =========================================================
+# 7) PARSING (FLEXIBLE) - يدعم 1) أو - أو * أو ترقيم
+# =========================================================
 def parse_gap_response(raw: str):
-    """
-    تحليل النص الخام المسترجع من AI وضمان استخراج الملخص والمواضيع بدقة.
-    """
     if not raw:
         return "", []
 
     summary = ""
     topics = []
-    
-    # استخراج الملخص باستخدام البحث عن الكلمة المفتاحية SUMMARY
-    summary_match = re.search(r"SUMMARY:(.*?)(?=TOPICS:|$)", raw, re.DOTALL | re.IGNORECASE)
-    if summary_match:
-        summary = summary_match.group(1).strip()
 
-    # استخراج المواضيع: نبحث عن الأسطر التي تبدأ برقم تليها النقاط
-    # الصيغة المتوقعة: 1. العنوان || السبب || القالب
-    topic_lines = re.findall(r"^\d+\.\s*(.*)", raw, re.MULTILINE)
-    
-    for line in topic_lines:
-        parts = [p.strip() for p in line.split("||")]
-        if len(parts) >= 3:
-            topics.append({
-                "topic_title": parts[0],
-                "gap_reason": parts[1],
-                "format_suggestion": " || ".join(parts[2:])
-            })
-            
+    summary_match = re.search(r"(SUMMARY:|ملخص:)(.*?)(?=TOPICS:|المواضيع:|$)", raw, re.DOTALL | re.IGNORECASE)
+    if summary_match:
+        summary = summary_match.group(2).strip()
+
+    body = raw
+    topics_start = re.search(r"(TOPICS:|المواضيع:)\s*(.*)$", raw, re.DOTALL | re.IGNORECASE)
+    if topics_start:
+        body = topics_start.group(2)
+
+    lines = [l.strip() for l in body.splitlines() if l.strip()]
+    for line in lines:
+        line = re.sub(r"^(?:\d+[\.\)]\s*|[-*•]\s*)", "", line).strip()
+        if "||" in line:
+            parts = [p.strip() for p in line.split("||")]
+            if len(parts) >= 3:
+                topics.append({
+                    "topic_title": parts[0],
+                    "gap_reason": parts[1],
+                    "format_suggestion": " || ".join(parts[2:]).strip(),
+                })
+
     return summary, topics
 
-def get_or_create_gap_analysis(my_posts, competitor_posts):
-    """
-    إرجاع النتيجة كاملة (الملخص + المواضيع + الكاش) لضمان عدم حدوث ValueError.
-    """
-    combined_text = f"{my_posts}\n---\n{competitor_posts}"
+# =========================================================
+# 8) PROMPT - PERSONAL BRANDING + FORMAT OPTIONS محددة
+# =========================================================
+ALLOWED_FORMATS_AR = "ريلز / بوست / كاروسيل / فيديو / مقال"
+ALLOWED_FORMATS_EN = "Reel / Post / Carousel / Video / Article"
+
+def build_prompt(my_posts: str, competitor_posts: str) -> str:
+    if IS_EN:
+        return f"""
+You are a Personal Branding content strategist specializing in Content Gap analysis.
+
+Task:
+- Compare the creator's recent posts with competitors' posts.
+- Extract 5 to 7 missing topics the creator should cover NEXT to grow personal brand.
+- Keep it practical and relevant to: positioning, authority, trust, consistency, and audience growth.
+
+IMPORTANT:
+- The "Best format" MUST be ONLY one of these options exactly: {ALLOWED_FORMATS_EN}
+
+Creator posts:
+{my_posts}
+
+Competitors posts:
+{competitor_posts}
+
+Return EXACTLY in this format (no markdown, no extra text):
+
+SUMMARY: Write a 1–2 line summary explaining the biggest gap in the creator’s personal branding content.
+
+TOPICS:
+1. Missing topic title || Why this is an important gap (personal brand angle) || Best format (ONLY from: {ALLOWED_FORMATS_EN})
+2. ...
+3. ...
+4. ...
+5. ...
+6. (if needed)
+7. (if needed)
+"""
+    else:
+        return f"""
+أنت خبير استراتيجية محتوى متخصص في بناء البراند الشخصي وتحليل فجوات المحتوى (Content Gaps).
+
+مهمتك:
+- قارن بين منشورات "صاحب الحساب" ومنشورات "المنافسين".
+- استخرج 5 إلى 7 مواضيع مفقودة تساعد صاحب الحساب على:
+  (التموضع، رفع الثقة، إبراز القيمة، بناء السلطة، زيادة التفاعل، نمو الجمهور).
+- اجعل الخطاب بصيغة المذكر (أنت تنشر / يفيدك / يساعدك).
+
+مهم جداً:
+- خانة "الشكل المقترح" لازم تكون فقط واحدة من هذه الخيارات حرفياً: {ALLOWED_FORMATS_AR}
+
+منشورات صاحب الحساب:
+{my_posts}
+
+منشورات المنافسين:
+{competitor_posts}
+
+أعد النتيجة بالصيغة التالية تماماً (بدون Markdown وبدون أي نص إضافي):
+
+SUMMARY: ملخص من سطرين يوضح أكبر فجوة في محتوى البراند الشخصي لصاحب الحساب.
+
+TOPICS:
+1. عنوان موضوع مفقود || لماذا هذا الموضوع فجوة مهمة لبناء البراند الشخصي لديك || الشكل المقترح (فقط من: {ALLOWED_FORMATS_AR})
+2. ...
+3. ...
+4. ...
+5. ...
+6. (إن لزم)
+7. (إن لزم)
+"""
+
+def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
+    combined_text = f"{my_posts}\n---\n{competitor_posts}\nLANG={st.session_state['ui_lang']}"
     content_hash = get_content_hash(combined_text)
 
-    # 1. محاولة القراءة من الكاش
-    try:
-        res = supabase.table("viral_scores_cache").select("analysis_text").eq("app_id", APP_ID).eq("content_hash", content_hash).limit(1).execute()
-        if res.data:
-            s, t = parse_gap_response(res.data[0]["analysis_text"])
-            return s, t, True
-    except: pass
+    cached = cache_get(APP_ID, content_hash)
+    if cached:
+        s, t = parse_gap_response(cached)
+        return s, t, True, None
 
-    # 2. استدعاء الموديل في حال عدم وجود كاش
-    prompt = f"""
-    أنت خبير استراتيجية محتوى. قارن بين منشورات العميل ومنشورات المنافسين.
-    العميل: {my_posts}
-    المنافسون: {competitor_posts}
-    
-    أعطني النتيجة بالصيغة التالية تماماً:
-    SUMMARY: (اكتب هنا ملخص الفجوة في سطرين)
-    TOPICS:
-    1. العنوان المقترح || سبب الأهمية || شكل المحتوى (ريلز، بوست، الخ)
-    2. العنوان المقترح || سبب الأهمية || شكل المحتوى
-    ... وهكذا لـ 5 مواضيع.
-    """
-    
+    model = get_working_model()
+    prompt = build_prompt(my_posts, competitor_posts)
+
+    cfg = types.GenerateContentConfig(
+        temperature=0.35,
+        top_p=0.9,
+        max_output_tokens=1600,
+    )
+
     try:
-        response = genai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.4)
-        )
-        raw_text = response.text
-        
-        # حفظ في الكاش
-        supabase.table("viral_scores_cache").insert({
-            "app_id": APP_ID,
-            "content_hash": content_hash,
-            "analysis_text": raw_text
-        }).execute()
-        
-        s, t = parse_gap_response(raw_text)
-        return s, t, False
+        raw_text = call_model_with_retry(model, prompt, cfg, retries=3)
     except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return "", [], False
+        return "", [], False, str(e)
+
+    cache_set(APP_ID, content_hash, raw_text)
+    s, t = parse_gap_response(raw_text)
+    return s, t, False, None
 
 # =========================================================
-# 4) UI Layout
+# 9) CSS (Hide Streamlit header + RTL/LTR + Red button + Footer RTL)
 # =========================================================
-st.markdown(f"<style>body {{ direction: {DIR}; text-align: {ALIGN}; }}</style>", unsafe_allow_html=True)
+st.markdown(
+    f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
 
-st.title("🧩 منشئ المحتوى المفقود")
+#MainMenu {{ visibility: hidden; }}
+header {{ visibility: hidden; }}
+footer {{ visibility: hidden; }}
+div[data-testid="stToolbar"] {{ visibility: hidden; }}
+div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
+div[data-testid="stDecoration"] {{ visibility: hidden; }}
+div[class*="viewerBadge_container"] {{ display: none !important; }}
+div[class*="viewerBadge_link"] {{ display: none !important; }}
+div[class*="viewerBadge_text"] {{ display: none !important; }}
+
+html, body, [data-testid="stAppViewContainer"], .main {{
+  direction: {DIR} !important;
+  text-align: {ALIGN} !important;
+  font-family: "Cairo", sans-serif !important;
+}}
+
+h1,h2,h3,h4,h5,h6,p,div,span,label,li,[data-testid="stMarkdownContainer"] {{
+  direction: {DIR} !important;
+  text-align: {ALIGN} !important;
+  unicode-bidi: plaintext !important;
+  line-height: 1.75 !important;
+}}
+
+textarea, input {{
+  direction: {DIR} !important;
+  text-align: {ALIGN} !important;
+}}
+
+.stButton > button {{
+  background-color: #e63946 !important;
+  color: white !important;
+  font-weight: 800 !important;
+  border-radius: 14px !important;
+  width: 100% !important;
+  height: 3.2em !important;
+  border: none !important;
+}}
+.stButton > button:hover {{
+  filter: brightness(0.95);
+  transform: scale(1.01);
+}}
+
+.footer-container {{
+  width: 100%;
+  text-align: center;
+  margin-top: 45px;
+  padding-top: 18px;
+  border-top: 1px solid #666;
+  font-size: 13px;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  direction: rtl !important;
+}}
+.footer-container, .footer-container * {{
+  direction: rtl !important;
+  text-align: center !important;
+}}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# 10) UI TEXTS + PLACEHOLDERS (PERSONAL BRANDING)
+# =========================================================
+TITLE = "🧩 Missing Content Generator" if IS_EN else "🧩 منشئ المحتوى المفقود"
+CAPTION = "Compare your content vs competitors to discover missing topics that grow your personal brand." if IS_EN else "قارن محتواك مع المنافسين لتكتشف مواضيع مفقودة ترفع قوة براندك الشخصي."
+
+LABEL_MY = "✍️ Your recent content (titles / summaries)" if IS_EN else "✍️ محتواك الأخير (عناوين / ملخصات)"
+LABEL_COMP = "📌 Competitors content (titles / summaries)" if IS_EN else "📌 محتوى المنافسين (عناوين / ملخصات)"
+BTN = "🎯 Analyze gaps & suggest topics" if IS_EN else "🎯 تحليل الفجوات واقتراح المواضيع"
+
+PH_MY = (
+"""Example (Personal Branding):
+- My story: from CS student to AI builder
+- What I learned from building 5 tools
+- Mistakes I made in positioning
+- How I write better hooks
+- Behind-the-scenes of my workflow
+"""
+if IS_EN else
+"""مثال (براند شخصي):
+- قصتي: من طالبة CS إلى AI Builder
+- ماذا تعلمت من بناء 5 أدوات
+- أخطاء وقعت فيها بالتموضع
+- كيف أكتب Hooks أقوى
+- خلف الكواليس: كيف أشتغل يومياً
+"""
+)
+
+PH_COMP = (
+"""Example (Competitors):
+- How to build authority on LinkedIn
+- My weekly content system
+- Case study: how I got 10 clients
+- Personal brand messaging framework
+- Content distribution checklist
+"""
+if IS_EN else
+"""مثال (منافسين):
+- كيف تبني Authority على LinkedIn
+- نظام محتوى أسبوعي ثابت
+- Case Study: كيف جبت 10 عملاء
+- إطار واضح لرسائل البراند الشخصي
+- Checklist لتوزيع المحتوى
+"""
+)
+
+# =========================================================
+# 11) HEADER + EXPANDER (شرح + مثال)
+# =========================================================
+st.title(TITLE)
+st.caption(CAPTION)
+
+with st.expander("What is this tool?" if IS_EN else "ما هي هذه الأداة؟", expanded=True):
+    if IS_EN:
+        st.markdown(f"""
+This tool finds **missing topics** in your personal branding content.
+
+It compares:
+- Your recent content
+- Competitors’ content
+
+Then it outputs:
+- A short summary of your biggest gap
+- **5–7 missing topics** with:
+  - Why it matters (personal brand angle)
+  - Best format (**ONLY**: {ALLOWED_FORMATS_EN})
+
+**Mini example**
+If you post mostly about “tools”, and competitors post about “positioning + case studies”:
+You’ll get missing topics like: “your positioning statement”, “proof & case studies”, “content distribution system”, etc.
+""")
+    else:
+        st.markdown(f"""
+هذه الأداة تكشف **المواضيع المفقودة** في محتواك لبناء البراند الشخصي.
+
+تقارن بين:
+- محتواك الحالي
+- محتوى المنافسين
+
+ثم تعطيك:
+- ملخص سريع لأكبر فجوة عندك
+- **5–7 مواضيع مفقودة** مع:
+  - لماذا هي مهمة (من زاوية البراند الشخصي)
+  - الشكل الأنسب للنشر (**فقط**: {ALLOWED_FORMATS_AR})
+
+**مثال صغير**
+إذا أنت تنشر كثير عن “الأدوات”، والمنافسون ينشرون عن “التموضع + دراسات الحالة”:
+ستظهر لك مواضيع مثل: “جملة تموضعك”، “إثباتات وتجارب”، “نظام توزيع المحتوى”… إلخ.
+""")
+
+st.markdown("---")
+
+# =========================================================
+# 12) INPUTS
+# =========================================================
 col1, col2 = st.columns(2)
-
 with col1:
-    my_input = st.text_area("✍️ منشوراتك الأخيرة:", height=200)
+    my_input = st.text_area(LABEL_MY, height=240, placeholder=PH_MY)
 with col2:
-    comp_input = st.text_area("📌 منشورات المنافسين:", height=200)
+    comp_input = st.text_area(LABEL_COMP, height=240, placeholder=PH_COMP)
 
-if st.button("🎯 تحليل الفجوات واقتراح المواضيع"):
-    if my_input and comp_input:
-        with st.spinner("جاري التحليل..."):
-            # تفكيك 3 قيم لضمان عدم حدوث الخطأ (Expected 2)
-            summary, topics, was_cached = get_or_create_gap_analysis(my_input, comp_input)
-            
+# =========================================================
+# 13) RUN
+# =========================================================
+if st.button(BTN):
+    if not my_input.strip() or not comp_input.strip():
+        st.warning("Please fill both fields." if IS_EN else "يرجى تعبئة الحقلين أولاً.")
+    else:
+        track_cta_event()
+        with st.spinner("Analyzing..." if IS_EN else "جاري التحليل..."):
+            summary, topics, was_cached, err = get_or_create_gap_analysis(my_input.strip(), comp_input.strip())
+
+        if err:
+            st.error(f"Model error: {err}" if IS_EN else f"خطأ من الموديل: {err}")
+        elif not topics:
+            st.error("No clear topics returned — try adding more details." if IS_EN else "لم تظهر مواضيع واضحة — جرّب إضافة تفاصيل أكثر.")
+        else:
             st.session_state["res_sum"] = summary
             st.session_state["res_top"] = topics
             st.session_state["is_cached"] = was_cached
-    else:
-        st.warning("يرجى إدخال البيانات في كلا الحقلين.")
 
-# عرض النتائج كاملة
+# =========================================================
+# 14) RESULTS
+# =========================================================
 if "res_sum" in st.session_state:
     st.markdown("---")
-    st.subheader("📊 ملخص التحليل")
-    st.info(st.session_state["res_sum"])
-    
-    if st.session_state["res_top"]:
-        st.subheader("🧩 المواضيع المقترحة")
-        df = pd.DataFrame(st.session_state["res_top"])
-        df.columns = ["الموضوع", "السبب", "الشكل المقترح"]
-        st.table(df) # استخدام Table لضمان ظهور النص كاملاً
-    else:
-        st.error("لم يتم العثور على مواضيع واضحة، حاول إضافة تفاصيل أكثر.")
+    st.subheader("📊 Summary" if IS_EN else "📊 ملخص التحليل")
+    st.info(st.session_state["res_sum"] or "—")
 
-st.markdown(f"<div style='text-align:center; padding:20px;'>جميع الحقوق محفوظة ©️ 2026 | Layan Khalil</div>", unsafe_allow_html=True)
+    st.subheader("🧩 Suggested missing topics" if IS_EN else "🧩 المواضيع المقترحة")
+    df = pd.DataFrame(st.session_state["res_top"])
+    df.columns = ["Topic" if IS_EN else "الموضوع", "Why it matters" if IS_EN else "سبب الأهمية", "Best format" if IS_EN else "الشكل المقترح"]
+    st.table(df)
 
+# =========================================================
+# 15) FEEDBACK UI (مع placeholders)
+# =========================================================
+st.markdown("---")
+st.subheader("📝 Feedback" if IS_EN else "📝 فيدباك")
+
+if IS_EN:
+    useful = st.radio("Was this tool useful?", ["Yes", "No"], horizontal=True)
+    useful_bool = (useful == "Yes")
+
+    helpful_reason = st.text_area(
+        "What was most helpful?",
+        height=110,
+        placeholder="Example: It gave me missing topics I never thought about, and the formats made it easy to execute."
+    )
+    problem_text = st.text_area(
+        "What didn't work / what was unclear?",
+        height=110,
+        placeholder="Example: Some topics felt too generic or the summary didn’t match my niche."
+    )
+    missing_reason = st.text_area(
+        "What feature would make this a must-use for personal branding?",
+        height=110,
+        placeholder="Example: Add a weekly content plan + hook ideas for each missing topic."
+    )
+    must_use_text = st.text_area(
+        "If you had to describe it in one sentence, what would you say?",
+        height=90,
+        placeholder="Example: A tool that reveals what you should post next to build authority faster."
+    )
+    send_label = "Submit feedback"
+else:
+    useful = st.radio("هل كانت الأداة مفيدة؟", ["نعم", "لا"], horizontal=True)
+    useful_bool = (useful == "نعم")
+
+    helpful_reason = st.text_area(
+        "ما أكثر شيء أفادك؟",
+        height=110,
+        placeholder="مثال: اقترح مواضيع مفقودة فعلاً وخلاني أفهم شو ناقص ببراندك الشخصي، وكمان أعطاني شكل النشر المناسب."
+    )
+    problem_text = st.text_area(
+        "ما الذي لم يعجبك أو كان غير واضح؟",
+        height=110,
+        placeholder="مثال: بعض المواضيع كانت عامة أو الملخص ما كان مطابق تماماً لمجالي."
+    )
+    missing_reason = st.text_area(
+        "ما الإضافة التي تجعل الأداة أساسية لبناء البراند الشخصي؟",
+        height=110,
+        placeholder="مثال: جدول أسبوعي جاهز + أفكار Hooks لكل موضوع مفقود."
+    )
+    must_use_text = st.text_area(
+        "إذا بدك توصفها بجملة واحدة، شو بتحكي؟",
+        height=90,
+        placeholder="مثال: أداة بتكشفلك شو لازم تنشر بعدها عشان تبني Authority أسرع."
+    )
+    send_label = "إرسال الفيدباك"
+
+if st.button(send_label):
+    try:
+        save_feedback_via_rpc(
+            app_name=APP_ID,
+            useful=useful_bool,
+            missing_reason=missing_reason.strip(),
+            problem_text=problem_text.strip(),
+            helpful_reason=helpful_reason.strip(),
+            must_use_text=must_use_text.strip(),
+        )
+        st.success("Thanks! Your feedback was submitted." if IS_EN else "تم! شكراً على الفيدباك 🙌")
+    except Exception as e:
+        st.error(f"Failed to submit feedback: {e}" if IS_EN else f"فشل إرسال الفيدباك: {e}")
+
+# =========================================================
+# 16) FOOTER (RTL always)
+# =========================================================
+st.markdown(
+    """
+<div class="footer-container">
+  <span>جميع الحقوق محفوظة © 2026 |</span>
+  <span>AI Product Builder - Layan Khalil</span>
+</div>
+""",
+    unsafe_allow_html=True,
+)
