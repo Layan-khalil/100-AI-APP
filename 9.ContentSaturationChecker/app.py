@@ -65,7 +65,7 @@ except Exception as e:
     st.stop()
 
 supabase = None
-APP_ID = "time-saturation-checker-v1"
+APP_ID = "9-time-saturation-checker"
 
 if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
@@ -729,3 +729,4 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
