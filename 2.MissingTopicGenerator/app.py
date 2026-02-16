@@ -169,44 +169,35 @@ def cache_set(app_id: str, content_hash: str, analysis_text: str):
 # 7) PARSING (ROBUST & FLEXIBLE)
 # =========================================================
 def parse_gap_response(raw: str):
-    """
-    تحليل رد الموديل واستخراج الملخص والمواضيع بمرونة عالية جداً.
-    """
     if not raw:
         return "", []
 
-    # 1. تنظيف النص من أي رموز Markdown قد يضيفها الموديل وتفسد التحليل
-    clean_raw = raw.replace("**", "").replace("__", "").replace("`", "").replace("###", "")
+    # تنظيف النص من أي زخارف Markdown (النجوم والجداول)
+    clean_raw = re.sub(r"[*_`#]", "", raw)
     
-    # تحويل "TOPICS :" إلى "TOPICS:" لتوحيد البحث
-    clean_raw = re.sub(r"(TOPICS|المواضيع)\s*:", "TOPICS:", clean_raw, flags=re.IGNORECASE)
-    clean_raw = re.sub(r"(SUMMARY|ملخص)\s*:", "SUMMARY:", clean_raw, flags=re.IGNORECASE)
-
     summary = ""
     topics = []
 
-    # 2. استخراج الملخص (Summary)
-    # يبحث عن النص بين SUMMARY: و TOPICS: أو نهاية النص
+    # 1. استخراج الملخص (Summary)
+    # نبحث عن النص بعد كلمة SUMMARY أو ملخص وقبل TOPICS أو المواضيع
     summary_match = re.search(
-        r"SUMMARY:(.*?)(?=TOPICS:|$)",
+        r"(?:SUMMARY|ملخص)\s*[:：]\s*(.*?)(?=(?:TOPICS|المواضيع)|$)",
         clean_raw,
         re.DOTALL | re.IGNORECASE
     )
     if summary_match:
         summary = summary_match.group(1).strip()
 
-    # 3. استخراج المواضيع (Topics)
-    # نبحث عن أي سطر يحتوي على الفاصل ||
+    # 2. استخراج المواضيع (Topics)
+    # النمط الجديد يبحث عن أي سطر يحتوي على || بغض النظر عن ما قبله
     lines = clean_raw.splitlines()
     for line in lines:
         line = line.strip()
         if "||" in line:
-            # تنظيف بداية السطر من الترقيم (مثل 1. أو - أو *)
+            # إزالة الترقيم من بداية السطر (مثل 1. أو - أو *)
             clean_line = re.sub(r"^(?:\d+[\.\)\-]*|[-*•])\s*", "", line).strip()
-            
             parts = [p.strip() for p in clean_line.split("||")]
             
-            # التأكد من وجود 3 أجزاء على الأقل (العنوان || السبب || الشكل)
             if len(parts) >= 3:
                 topics.append({
                     "topic_title": parts[0],
@@ -215,6 +206,50 @@ def parse_gap_response(raw: str):
                 })
 
     return summary, topics
+
+def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
+    combined_text = (
+        f"{my_posts}\n---\n{competitor_posts}\n"
+        f"LANG={st.session_state.get('ui_lang', 'AR')}"
+    )
+    content_hash = get_content_hash(combined_text)
+
+    # 1) محاولة القراءة من الكاش
+    cached_text = cache_get(APP_ID, content_hash)
+    if cached_text:
+        s, t = parse_gap_response(cached_text)
+        if t: return s, t, True, None
+
+    # 2) استدعاء الموديل
+    model_name = get_working_model()
+    prompt = build_prompt(my_posts, competitor_posts)
+    
+    # إضافة تعليمات صارمة في اللحظة الأخيرة لضمان عدم فشل الـ Parsing
+    strict_instruction = "\n\nCRITICAL: You MUST use the '||' separator. Example: Topic Title || Reason || Format"
+    final_prompt = prompt + strict_instruction
+
+    cfg = types.GenerateContentConfig(
+        temperature=0.2, # حرارة منخفضة جداً لتقليل "هذيان" الموديل
+        top_p=0.8,
+        max_output_tokens=2000,
+    )
+
+    try:
+        raw_text = call_model_with_retry(model_name, final_prompt, cfg, retries=3)
+        
+        # 3) تحليل النتيجة
+        s, t = parse_gap_response(raw_text)
+
+        if not t:
+            # محاولة أخيرة: إذا فشل الـ Parsing، نبحث عن أي أسطر مرقمة ربما نسي الموديل وضع || فيها
+            return s, [], False, "AI failed to format the response correctly. Please try again."
+
+        # حفظ في الكاش فقط إذا نجح الـ Parsing
+        cache_set(APP_ID, content_hash, raw_text)
+        return s, t, False, None
+
+    except Exception as e:
+        return "", [], False, f"Error: {str(e)}"
 # =========================================================
 # 8) PROMPT - PERSONAL BRANDING + FORMAT OPTIONS محددة
 # =========================================================
@@ -712,6 +747,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
