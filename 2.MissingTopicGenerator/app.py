@@ -201,18 +201,29 @@ def parse_gap_response(raw: str):
 ALLOWED_FORMATS_AR = "ريلز / بوست / كاروسيل / فيديو / مقال"
 ALLOWED_FORMATS_EN = "Reel / Post / Carousel / Video / Article"
 
+
 def build_prompt(my_posts: str, competitor_posts: str) -> str:
+
     if IS_EN:
         return f"""
-You are a Personal Branding content strategist specializing in Content Gap analysis.
+You are a Personal Branding content strategist specializing in Content Gap analysis across social platforms.
 
-Task:
-- Compare the creator's recent posts with competitors' posts.
-- Extract 5 to 7 missing topics the creator should cover NEXT to grow personal brand.
-- Keep it practical and relevant to: positioning, authority, trust, consistency, and audience growth.
+Your task:
+- Understand the creator’s content style, positioning, and messaging.
+- Compare it with competitors that achieve higher engagement.
+- Identify missing angles or topics that reduce trust, authority, or engagement.
+
+Use SMEG framework when relevant:
+S — Story (personal experience)
+M — Meaning (insight or perspective)
+E — Emotion (emotional trigger)
+G — Guidance (practical takeaway)
 
 IMPORTANT:
-- The "Best format" MUST be ONLY one of these options exactly: {ALLOWED_FORMATS_EN}
+- The "Best format" MUST be ONLY one of these options exactly:
+{ALLOWED_FORMATS_EN}
+- Do not assume equal number of posts.
+- Input may contain long or unstructured paragraphs.
 
 Creator posts:
 {my_posts}
@@ -220,31 +231,40 @@ Creator posts:
 Competitors posts:
 {competitor_posts}
 
-Return EXACTLY in this format (no markdown, no extra text):
+Return EXACTLY in this format (no markdown, no bullets, no extra text):
 
 SUMMARY: Write a 1–2 line summary explaining the biggest gap in the creator’s personal branding content.
 
 TOPICS:
-1. Missing topic title || Why this is an important gap (personal brand angle) || Best format (ONLY from: {ALLOWED_FORMATS_EN})
-2. ...
-3. ...
-4. ...
-5. ...
+1. Missing topic title || Why this is an important gap (mention missing SMEG element if relevant) || Best format
+2. Missing topic title || Why this is an important gap || Best format
+3. Missing topic title || Why this is an important gap || Best format
+4. Missing topic title || Why this is an important gap || Best format
+5. Missing topic title || Why this is an important gap || Best format
 6. (if needed)
 7. (if needed)
 """
+
     else:
         return f"""
-أنت خبير استراتيجية محتوى متخصص في بناء البراند الشخصي وتحليل فجوات المحتوى (Content Gaps).
+أنت خبير استراتيجية محتوى متخصص في بناء البراند الشخصي وتحليل فجوات المحتوى.
 
 مهمتك:
-- قارن بين منشورات "صاحب الحساب" ومنشورات "المنافسين".
-- استخرج 5 إلى 7 مواضيع مفقودة تساعد صاحب الحساب على:
-  (التموضع، رفع الثقة، إبراز القيمة، بناء السلطة، زيادة التفاعل، نمو الجمهور).
-- اجعل الخطاب بصيغة المذكر (أنت تنشر / يفيدك / يساعدك).
+- فهم نمط محتوى صاحب الحساب (الأسلوب، الرسائل، الزوايا المتكررة).
+- مقارنة ذلك مع محتوى المنافسين الذين يحققون تفاعل أعلى.
+- استخراج المواضيع أو الزوايا الناقصة التي تجعل المحتوى أقل جذباً أو ثقة أو مشاركة.
+
+استخدم إطار SMEG عند الحاجة:
+S — Story: قصة أو تجربة شخصية.
+M — Meaning: فكرة أو معنى يغيّر طريقة التفكير.
+E — Emotion: عنصر عاطفي يحفّز التفاعل.
+G — Guidance: خطوة عملية أو توجيه واضح.
 
 مهم جداً:
-- خانة "الشكل المقترح" لازم تكون فقط واحدة من هذه الخيارات حرفياً: {ALLOWED_FORMATS_AR}
+- لا تفترض أن عدد المنشورات متساوٍ.
+- النصوص قد تكون طويلة أو غير منظمة.
+- خانة "الشكل المقترح" يجب أن تكون فقط واحدة من:
+{ALLOWED_FORMATS_AR}
 
 منشورات صاحب الحساب:
 {my_posts}
@@ -254,27 +274,37 @@ TOPICS:
 
 أعد النتيجة بالصيغة التالية تماماً (بدون Markdown وبدون أي نص إضافي):
 
-SUMMARY: ملخص من سطرين يوضح أكبر فجوة في محتوى البراند الشخصي لصاحب الحساب.
+SUMMARY: ملخص من سطرين يوضح أكبر فجوة في محتوى البراند الشخصي لديك.
 
 TOPICS:
-1. عنوان موضوع مفقود || لماذا هذا الموضوع فجوة مهمة لبناء البراند الشخصي لديك || الشكل المقترح (فقط من: {ALLOWED_FORMATS_AR})
-2. ...
-3. ...
-4. ...
-5. ...
+1. عنوان موضوع مفقود || لماذا هذه فجوة (مع ذكر عنصر SMEG الناقص إن وجد) || الشكل المقترح
+2. عنوان موضوع مفقود || لماذا هذه فجوة || الشكل المقترح
+3. عنوان موضوع مفقود || لماذا هذه فجوة || الشكل المقترح
+4. عنوان موضوع مفقود || لماذا هذه فجوة || الشكل المقترح
+5. عنوان موضوع مفقود || لماذا هذه فجوة || الشكل المقترح
 6. (إن لزم)
 7. (إن لزم)
 """
-
 def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
-    combined_text = f"{my_posts}\n---\n{competitor_posts}\nLANG={st.session_state['ui_lang']}"
+
+    combined_text = (
+        f"{my_posts}\n---\n{competitor_posts}\n"
+        f"LANG={st.session_state['ui_lang']}"
+    )
+
     content_hash = get_content_hash(combined_text)
 
+    # =========================
+    # 1) CACHE READ
+    # =========================
     cached = cache_get(APP_ID, content_hash)
     if cached:
         s, t = parse_gap_response(cached)
         return s, t, True, None
 
+    # =========================
+    # 2) BUILD PROMPT
+    # =========================
     model = get_working_model()
     prompt = build_prompt(my_posts, competitor_posts)
 
@@ -284,13 +314,33 @@ def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
         max_output_tokens=1600,
     )
 
+    # =========================
+    # 3) CALL MODEL
+    # =========================
     try:
-        raw_text = call_model_with_retry(model, prompt, cfg, retries=3)
+        raw_text = call_model_with_retry(
+            model,
+            prompt,
+            cfg,
+            retries=3
+        )
     except Exception as e:
         return "", [], False, str(e)
 
+    # =========================
+    # 4) CACHE WRITE
+    # =========================
     cache_set(APP_ID, content_hash, raw_text)
+
+    # =========================
+    # 5) PARSE RESULT
+    # =========================
     s, t = parse_gap_response(raw_text)
+
+    # حماية إضافية
+    if len(t) < 3:
+        return "", [], False, "Parsing failed or insufficient topics"
+
     return s, t, False, None
 
 # =========================================================
@@ -638,6 +688,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
