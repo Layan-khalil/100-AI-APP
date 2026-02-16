@@ -165,76 +165,44 @@ def cache_set(app_id: str, content_hash: str, analysis_text: str):
 # =========================================================
 # 7) PARSING (FLEXIBLE) - يدعم 1) أو - أو * أو ترقيم
 # =========================================================
+# =========================================================
+# 7) PARSING (ROBUST & FLEXIBLE)
+# =========================================================
 def parse_gap_response(raw: str):
     if not raw:
         return "", []
 
-    # تنظيف أولي
-    raw = raw.replace("TOPICS :", "TOPICS:")
-    raw = raw.replace("SUMMARY :", "SUMMARY:")
-
+    # تنظيف مسبق للرموز والنصوص الزائدة
+    raw = re.sub(r"[*_`]", "", raw) 
+    
     summary = ""
     topics = []
 
-    # =========================
-    # استخراج SUMMARY
-    # =========================
+    # 1) استخراج SUMMARY بدقة
     summary_match = re.search(
-        r"(SUMMARY:|ملخص:)(.*?)(?=TOPICS:|المواضيع:|$)",
+        r"(?:SUMMARY|ملخص)\s*:\s*(.*?)(?=(?:TOPICS|المواضيع)|$)",
         raw,
         re.DOTALL | re.IGNORECASE
     )
-
     if summary_match:
-        summary = summary_match.group(2).strip()
+        summary = summary_match.group(1).strip()
 
-    # =========================
-    # استخراج جسم المواضيع
-    # =========================
-    body = raw
-    topics_start = re.search(
-        r"(TOPICS:|المواضيع:)\s*(.*)$",
-        raw,
-        re.DOTALL | re.IGNORECASE
-    )
-
-    if topics_start:
-        body = topics_start.group(2)
-
-    # =========================
-    # تقسيم الأسطر
-    # =========================
-    lines = [l.strip() for l in body.splitlines() if l.strip()]
-
-    buffer_line = ""
-
+    # 2) استخراج المواضيع - نبحث عن أي سطر يحتوي على ||
+    # هذا النمط يتجاهل الترقيم (1. أو - أو *) ويركز على المحتوى
+    lines = raw.splitlines()
     for line in lines:
-
-        # إزالة الترقيم أو الرموز
-        line = re.sub(r"^(?:\d+\s*[\.\)\-]\s*|[-*•]\s*)", "", line).strip()
-
-        # دمج الأسطر لو السبب نزل بسطر ثاني
-        if "||" not in line:
-            buffer_line += " " + line
-            continue
-
-        full_line = (buffer_line + " " + line).strip()
-        buffer_line = ""
-
-        parts = [p.strip() for p in full_line.split("||")]
-
-        if len(parts) >= 3:
-            topics.append({
-                "topic_title": parts[0],
-                "gap_reason": parts[1],
-                "format_suggestion": " || ".join(parts[2:]).strip(),
-            })
-
-    # =========================
-    # حماية إضافية
-    # =========================
-    if len(topics) < 2:
-        return summary, []
+        line = line.strip()
+        # إزالة أي ترقيم في بداية السطر مثل 1) أو - أو *
+        clean_line = re.sub(r"^(?:\d+[\.\)\-]*|[-*•])\s*", "", line).strip()
+        
+        if "||" in clean_line:
+            parts = [p.strip() for p in clean_line.split("||")]
+            if len(parts) >= 3:
+                topics.append({
+                    "topic_title": parts[0],
+                    "gap_reason": parts[1],
+                    "format_suggestion": parts[2],
+                })
 
     return summary, topics
 
@@ -245,8 +213,13 @@ ALLOWED_FORMATS_AR = "ريلز / بوست / كاروسيل / فيديو / مقا
 ALLOWED_FORMATS_EN = "Reel / Post / Carousel / Video / Article"
 
 
+# =========================================================
+# 8) PROMPT - PERSONAL BRANDING + SMEG (ORIGINAL TEXT + ROBUST ADDITIONS)
+# =========================================================
 def build_prompt(my_posts: str, competitor_posts: str) -> str:
-
+    # خيارات الأشكال المتاحة بناءً على اللغة
+    format_options = ALLOWED_FORMATS_EN if IS_EN else ALLOWED_FORMATS_AR
+    
     if IS_EN:
         return f"""
 You are a Personal Branding content strategist specializing in Content Gap analysis across social platforms.
@@ -262,11 +235,11 @@ M — Meaning (insight or perspective)
 E — Emotion (emotional trigger)
 G — Guidance (practical takeaway)
 
-IMPORTANT:
-- The "Best format" MUST be ONLY one of these options exactly:
-{ALLOWED_FORMATS_EN}
+IMPORTANT (Robust Handling Additions):
+- The input may contain long, unstructured paragraphs, stories, or links. Focus on the core message and ignore URLs.
 - Do not assume equal number of posts.
-- Input may contain long or unstructured paragraphs.
+- The "Best format" MUST be ONLY one of these options exactly: {format_options}
+- Return EXACTLY in the format below using '||' as a separator.
 
 Creator posts:
 {my_posts}
@@ -303,11 +276,11 @@ M — Meaning: فكرة أو معنى يغيّر طريقة التفكير.
 E — Emotion: عنصر عاطفي يحفّز التفاعل.
 G — Guidance: خطوة عملية أو توجيه واضح.
 
-مهم جداً:
+مهم جداً (إضافات لضمان معالجة الفقرات):
+- النصوص قد تكون طويلة، فقرات قصصية، أو غير منظمة وتحوي روابط؛ حلل المضمون وتجاهل الروابط.
 - لا تفترض أن عدد المنشورات متساوٍ.
-- النصوص قد تكون طويلة أو غير منظمة.
-- خانة "الشكل المقترح" يجب أن تكون فقط واحدة من:
-{ALLOWED_FORMATS_AR}
+- خانة "الشكل المقترح" يجب أن تكون فقط واحدة من: {format_options}
+- التزم تماماً باستخدام الفاصل '||' بين الأجزاء.
 
 منشورات صاحب الحساب:
 {my_posts}
@@ -343,7 +316,9 @@ def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
     cached = cache_get(APP_ID, content_hash)
     if cached:
         s, t = parse_gap_response(cached)
-        return s, t, True, None
+        # إذا وجدنا مواضيع في الكاش، نرجعها فوراً
+        if t:
+            return s, t, True, None
 
     # =========================
     # 2) BUILD PROMPT
@@ -376,16 +351,15 @@ def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
     cache_set(APP_ID, content_hash, raw_text)
 
     # =========================
-    # 5) PARSE RESULT
+    # 5) PARSE RESULT (هنا الإضافة المطلوبة)
     # =========================
     s, t = parse_gap_response(raw_text)
 
-    # حماية إضافية
-    if len(t) < 3:
-        return "", [], False, "Parsing failed or insufficient topics"
+    # الحماية الإضافية لضمان عدم حدوث خطأ Parsing failed
+    if not t:
+        return "", [], False, "Parsing failed: AI output format was incorrect"
 
     return s, t, False, None
-
 # =========================================================
 # 9) CSS (Hide Streamlit header + RTL/LTR + Red button + Footer RTL)
 # =========================================================
@@ -731,6 +705,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
