@@ -318,6 +318,7 @@ def extract_sources(resp, limit: int = 5):
 # =========================================================
 # 9) Core function: saturation check (with caching + retries)
 # =========================================================
+
 MAX_RETRIES = 4
 INITIAL_DELAY = 2
 
@@ -326,146 +327,54 @@ def build_system_prompt() -> str:
         return (
             "Act as a professional Content Trend Analyst specializing in social media saturation. "
             "Use Google Search grounding. Determine saturation level for the topic on the specified platform. "
-            "Return ONLY a JSON object with EXACT keys: "
-            "'SaturationLevel' (Low/Medium/High), 'Recommendation' (Publish Now/Postpone/Adapt), 'Justification'. "
-            "No markdown. No extra text."
+            "CRITICAL: Your response must be a SINGLE VALID JSON OBJECT. Do not truncate. "
+            "Expected keys: 'SaturationLevel' (Low/Medium/High), 'Recommendation' (Publish Now/Postpone/Adapt), 'Justification'. "
+            "Provide a detailed Justification."
         )
     return (
         "تصرّف كخبير تحليل ترندات متخصص في قياس ازدحام الأفكار على منصات السوشال ميديا. "
         "استخدم Google Search grounding. حدّد مستوى الازدحام للفكرة على المنصة. "
-        "أعد النتيجة فقط بصيغة JSON وبالمفاتيح التالية حصراً: "
-        "'SaturationLevel' (منخفض/متوسط/مرتفع), 'Recommendation' (انشر الآن/أجّل النشر/عدّل الزاوية), 'Justification'. "
-        "ممنوع Markdown أو نص إضافي."
+        "هام جداً: يجب أن يكون ردك عبارة عن كائن JSON واحد صحيح وكامل. لا تقطع النص أبداً. "
+        "المفاتيح المطلوبة: 'SaturationLevel' (منخفض/متوسط/مرتفع), 'Recommendation' (انشر الآن/أجّل النشر/عدّل الزاوية), 'Justification'. "
+        "اكتب تبريراً مفصلاً وكاملاً في خانة Justification."
     )
 
 def build_user_prompt(content_idea: str, platform: str) -> str:
     if IS_EN:
-        return f"""
-Analyze saturation for this idea on the target platform using very recent signals from search.
+        return f"Analyze saturation for: {content_idea} on {platform}. Return ONLY JSON."
+    return f"حلّل مستوى الازدحام لـ: {content_idea} على منصة {platform}. أعد النتيجة بصيغة JSON فقط."
 
-Idea: {content_idea}
-Platform: {platform}
-
-Return ONLY JSON with keys:
-SaturationLevel, Recommendation, Justification
-"""
-    return f"""
-حلّل مستوى الازدحام (Saturation) للفكرة التالية على المنصة المحددة بالاعتماد على إشارات حديثة جداً من البحث.
-
-الفكرة: {content_idea}
-المنصة: {platform}
-
-أعد فقط JSON بالمفاتيح:
-SaturationLevel, Recommendation, Justification
-"""
-
-def sanitize_json_text(raw_text: str) -> str:
-    t = (raw_text or "").strip()
-    if t.startswith("```"):
-        t = t.replace("```json", "").replace("```", "").strip()
-    return t
-
-def extract_first_json_object(text: str) -> str:
-    """يحاول اقتناص أول { ... } من أي نص."""
-    if not text:
-        return ""
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    return m.group(0).strip() if m else text.strip()
-
-def sanitize_json_text(text: str) -> str:
-    """تنظيف قوي للنص قبل json.loads."""
-    if not text:
-        return ""
-
-    t = text.strip()
-
-    # شيل كود بلوك إن ظهر
-    t = re.sub(r"^```json\s*", "", t, flags=re.IGNORECASE).strip()
-    t = re.sub(r"^```\s*", "", t).strip()
-    t = re.sub(r"\s*```$", "", t).strip()
-
-    # اقتناص JSON فقط إن كان فيه كلام زائد
-    t = extract_first_json_object(t)
-
-    # استبدال الاقتباسات الذكية
-    t = (t.replace("“", '"').replace("”", '"')
-           .replace("‘", "'").replace("’", "'"))
-
-    # حذف أحرف التحكم (سبب شائع لـ Invalid control character)
-    t = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", t)
-
-    return t.strip()
-
-def safe_json_loads(raw: str):
-    """
-    محاولة json.loads بشكل آمن.
-    ترجع (obj, error_str). إذا نجحت error_str = None
-    """
-    try:
-        return json.loads(raw), None
-    except json.JSONDecodeError as e:
-        return None, str(e)
-
-def repair_json_with_model(client, model_name: str, broken_json_text: str):
-    """
-    إصلاح JSON بواسطة الموديل (بدون google_search).
-    يرجع dict أو None
-    """
-    repair_prompt = f"""
-Fix the following JSON to be valid JSON.
-Return ONLY valid JSON (no markdown, no explanation).
-
-BROKEN_JSON:
-{broken_json_text}
-""".strip()
-
-    try:
-        resp = client.models.generate_content(
-            model=model_name,
-            contents=repair_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.0,
-                max_output_tokens=700,
-            ),
-        )
-        cleaned = sanitize_json_text(getattr(resp, "text", "") or "")
-        obj, err = safe_json_loads(cleaned)
-        return obj if not err else None
-    except Exception:
-        return None    
+def extract_json_safely(text: str) -> str:
+    """تنظيف واستخراج الـ JSON بدقة عالية"""
+    if not text: return ""
+    text = re.sub(r"```json\s*|```", "", text).strip()
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1:
+        return text[start:end+1]
+    return text
 
 def check_saturation(content_idea: str, platform: str):
     if not client:
         return {"error": "API connection failed"}, []
 
     model_name = get_working_model_name()
-
-    # cache key includes language
     content_hash = get_hash(APP_ID, content_idea, platform, st.session_state["ui_lang"])
 
-    # 1) Supabase cache
+    # 1) التحقق من الكاش (Supabase & Local)
     cached = cache_get(APP_ID, content_hash)
     if cached:
         try:
             payload = json.loads(cached)
             return payload.get("result", {}), payload.get("sources", [])
-        except Exception:
-            cached = None  # ✅ ignore corrupted cache
+        except: pass
 
-    # 2) local cache
-    lc = local_cache_compute(content_hash, "")
-    if lc:
-        try:
-            payload = json.loads(lc)
-            return payload.get("result", {}), payload.get("sources", [])
-        except Exception:
-            lc = None  # ✅ ignore corrupted local cache
-
+    # 2) إعدادات التوليد لضمان عدم نقص الرد
     cfg = types.GenerateContentConfig(
         system_instruction=build_system_prompt(),
         tools=[{"google_search": {}}],
-        temperature=0.2,
-        max_output_tokens=900,
+        temperature=0.1, 
+        max_output_tokens=1500, # زيادة السعة لضمان اكتمال التبرير
     )
 
     prompt = build_user_prompt(content_idea, platform)
@@ -473,61 +382,33 @@ def check_saturation(content_idea: str, platform: str):
     last_err = None
     for attempt in range(MAX_RETRIES):
         try:
-            resp = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=cfg
-            )
+            resp = client.models.generate_content(model=model_name, contents=prompt, config=cfg)
+            sources = extract_sources(resp, limit=5)
+            raw_text = getattr(resp, "text", "") or ""
+            
+            json_str = extract_json_safely(raw_text)
+            if not json_str: continue
 
-            sources = extract_sources(resp, limit=5)  # ✅ smaller payload
-            raw0 = getattr(resp, "text", "") or ""
-            raw = sanitize_json_text(raw0)
+            try:
+                result = json.loads(json_str)
+                # التأكد من اكتمال البيانات
+                if all(k in result for k in ["SaturationLevel", "Recommendation", "Justification"]):
+                    payload_json = json.dumps({"result": result, "sources": sources}, ensure_ascii=False)
+                    cache_set(APP_ID, content_hash, payload_json)
+                    return result, sources
+            except json.JSONDecodeError:
+                # محاولة الإصلاح إذا كان الـ JSON مكسوراً
+                fixed = repair_json_with_model(client, model_name, json_str)
+                if fixed:
+                    payload_json = json.dumps({"result": fixed, "sources": sources}, ensure_ascii=False)
+                    cache_set(APP_ID, content_hash, payload_json)
+                    return fixed, sources
 
-            if not raw:
-                   return {"error": "Empty model response"}, []
-
-            result, err = safe_json_loads(raw)
-
-# ✅ محاولة ثانية: اقتناص JSON فقط + تنظيف مرة أخرى
-            if err:
-                raw2 = sanitize_json_text(extract_first_json_object(raw0))
-                result, err = safe_json_loads(raw2)
-
-# ✅ محاولة ثالثة: إصلاح JSON عبر الموديل (بدون Search)
-            if err:
-               fixed = repair_json_with_model(client, model_name, raw2 if 'raw2' in locals() else raw)
-               if fixed:
-                 result, err = fixed, None
-
-            if err:
-    # لعرض جزء صغير فقط للمساعدة
-               snippet = (raw[:220] + "…") if len(raw) > 220 else raw
-               return {"error": f"JSON parse failed: {err}. Snippet: {snippet}"}, []
-
-            payload_json = json.dumps(
-                {"result": result, "sources": sources},
-                ensure_ascii=False
-            )
-
-            # save to local cache
-            local_cache_compute(content_hash, payload_json)
-
-            # save to supabase cache
-            cache_set(APP_ID, content_hash, payload_json)
-
-            return result, sources
-
-        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
-            last_err = e
-            time.sleep(INITIAL_DELAY * (attempt + 1))
-        except json.JSONDecodeError as e:
-            return {"error": f"JSON parse failed: {e}"}, []
         except Exception as e:
             last_err = e
             time.sleep(INITIAL_DELAY * (attempt + 1))
 
-    return {"error": str(last_err) if last_err else "Unknown error"}, []
-
+    return {"error": f"فشل في تحليل البيانات بشكل كامل: {str(last_err)}"}, []
 # =========================================================
 # 10) UI copy (AR/EN) + Expander
 # =========================================================
@@ -758,6 +639,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
