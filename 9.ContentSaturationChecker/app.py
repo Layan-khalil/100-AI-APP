@@ -4,7 +4,7 @@ import json
 import time
 import uuid
 import hashlib
-
+import re
 from google import genai
 from google.genai import types
 from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
@@ -425,15 +425,54 @@ def check_saturation(content_idea: str, platform: str):
     last_err = None
     for attempt in range(MAX_RETRIES):
         try:
-            resp = client.models.generate_content(model=model_name, contents=prompt, config=cfg)
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=cfg
+            )
+
             sources = extract_sources(resp)
-            raw = sanitize_json_text(getattr(resp, "text", "") or "")
+
+            # =========================
+            # ✅ FIX: stronger sanitization
+            # =========================
+            raw_text = (getattr(resp, "text", "") or "").strip()
+
+            # 1) remove markdown fences
+            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+
+            # 2) remove control chars that break JSON
+            #    (this is the main cause of "Invalid control character")
+            raw_text = re.sub(r"[\x00-\x1F]+", " ", raw_text)
+
+            # 3) keep only first JSON object if model adds extra text
+            m = re.search(r"\{.*\}", raw_text, re.DOTALL)
+            if m:
+                raw_text = m.group(0).strip()
+
+            # 4) final trim
+            raw = sanitize_json_text(raw_text).strip() if raw_text else ""
+
             if not raw:
                 return {"error": "Empty model response"}, []
 
-            result = json.loads(raw)
+            # try parse
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                # optional second attempt: sometimes model uses single quotes
+                raw2 = raw.replace("\u201c", '"').replace("\u201d", '"').replace("'", '"')
+                raw2 = re.sub(r"[\x00-\x1F]+", " ", raw2)
+                m2 = re.search(r"\{.*\}", raw2, re.DOTALL)
+                if m2:
+                    raw2 = m2.group(0).strip()
+                result = json.loads(raw2)
+
             # persist cache as JSON string
-            payload_json = json.dumps({"result": result, "sources": sources}, ensure_ascii=False)
+            payload_json = json.dumps(
+                {"result": result, "sources": sources},
+                ensure_ascii=False
+            )
 
             # save to local cache
             local_cache_compute(content_hash, payload_json)
@@ -446,9 +485,11 @@ def check_saturation(content_idea: str, platform: str):
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
             last_err = e
             time.sleep(INITIAL_DELAY * (attempt + 1))
+
         except json.JSONDecodeError as e:
-            # helpful error
+            # show short snippet for debugging
             return {"error": f"JSON parse failed: {e}"}, []
+
         except Exception as e:
             last_err = e
             time.sleep(INITIAL_DELAY * (attempt + 1))
@@ -680,3 +721,4 @@ st.markdown(
     '<div class="custom-footer">جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil</div>',
     unsafe_allow_html=True,
 )
+
