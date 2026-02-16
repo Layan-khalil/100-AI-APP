@@ -169,34 +169,44 @@ def cache_set(app_id: str, content_hash: str, analysis_text: str):
 # 7) PARSING (ROBUST & FLEXIBLE)
 # =========================================================
 def parse_gap_response(raw: str):
+    """
+    تحليل رد الموديل واستخراج الملخص والمواضيع بمرونة عالية جداً.
+    """
     if not raw:
         return "", []
 
-    # تنظيف مسبق للرموز والنصوص الزائدة
-    raw = re.sub(r"[*_`]", "", raw) 
+    # 1. تنظيف النص من أي رموز Markdown قد يضيفها الموديل وتفسد التحليل
+    clean_raw = raw.replace("**", "").replace("__", "").replace("`", "").replace("###", "")
     
+    # تحويل "TOPICS :" إلى "TOPICS:" لتوحيد البحث
+    clean_raw = re.sub(r"(TOPICS|المواضيع)\s*:", "TOPICS:", clean_raw, flags=re.IGNORECASE)
+    clean_raw = re.sub(r"(SUMMARY|ملخص)\s*:", "SUMMARY:", clean_raw, flags=re.IGNORECASE)
+
     summary = ""
     topics = []
 
-    # 1) استخراج SUMMARY بدقة
+    # 2. استخراج الملخص (Summary)
+    # يبحث عن النص بين SUMMARY: و TOPICS: أو نهاية النص
     summary_match = re.search(
-        r"(?:SUMMARY|ملخص)\s*:\s*(.*?)(?=(?:TOPICS|المواضيع)|$)",
-        raw,
+        r"SUMMARY:(.*?)(?=TOPICS:|$)",
+        clean_raw,
         re.DOTALL | re.IGNORECASE
     )
     if summary_match:
         summary = summary_match.group(1).strip()
 
-    # 2) استخراج المواضيع - نبحث عن أي سطر يحتوي على ||
-    # هذا النمط يتجاهل الترقيم (1. أو - أو *) ويركز على المحتوى
-    lines = raw.splitlines()
+    # 3. استخراج المواضيع (Topics)
+    # نبحث عن أي سطر يحتوي على الفاصل ||
+    lines = clean_raw.splitlines()
     for line in lines:
         line = line.strip()
-        # إزالة أي ترقيم في بداية السطر مثل 1) أو - أو *
-        clean_line = re.sub(r"^(?:\d+[\.\)\-]*|[-*•])\s*", "", line).strip()
-        
-        if "||" in clean_line:
+        if "||" in line:
+            # تنظيف بداية السطر من الترقيم (مثل 1. أو - أو *)
+            clean_line = re.sub(r"^(?:\d+[\.\)\-]*|[-*•])\s*", "", line).strip()
+            
             parts = [p.strip() for p in clean_line.split("||")]
+            
+            # التأكد من وجود 3 أجزاء على الأقل (العنوان || السبب || الشكل)
             if len(parts) >= 3:
                 topics.append({
                     "topic_title": parts[0],
@@ -205,7 +215,6 @@ def parse_gap_response(raw: str):
                 })
 
     return summary, topics
-
 # =========================================================
 # 8) PROMPT - PERSONAL BRANDING + FORMAT OPTIONS محددة
 # =========================================================
@@ -302,64 +311,62 @@ TOPICS:
 7. (إن لزم)
 """
 def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
-
+    """
+    الدالة الرئيسية لجلب التحليل من الكاش أو توليده عبر الموديل.
+    """
+    # إنشاء Hash فريد بناءً على المدخلات واللغة
     combined_text = (
         f"{my_posts}\n---\n{competitor_posts}\n"
-        f"LANG={st.session_state['ui_lang']}"
+        f"LANG={st.session_state.get('ui_lang', 'AR')}"
     )
-
     content_hash = get_content_hash(combined_text)
 
     # =========================
-    # 1) CACHE READ
+    # 1) محاولة القراءة من الكاش
     # =========================
-    cached = cache_get(APP_ID, content_hash)
-    if cached:
-        s, t = parse_gap_response(cached)
-        # إذا وجدنا مواضيع في الكاش، نرجعها فوراً
-        if t:
+    cached_text = cache_get(APP_ID, content_hash)
+    if cached_text:
+        s, t = parse_gap_response(cached_text)
+        if t: # إذا نجح التحليل نرجع النتيجة
             return s, t, True, None
 
     # =========================
-    # 2) BUILD PROMPT
+    # 2) استدعاء الموديل (في حال عدم وجود كاش أو فشله)
     # =========================
-    model = get_working_model()
+    model_name = get_working_model()
     prompt = build_prompt(my_posts, competitor_posts)
 
     cfg = types.GenerateContentConfig(
-        temperature=0.35,
+        temperature=0.3, # تقليل الحرارة لزيادة الالتزام بالتنسيق
         top_p=0.9,
-        max_output_tokens=1600,
+        max_output_tokens=2000,
     )
 
-    # =========================
-    # 3) CALL MODEL
-    # =========================
     try:
+        # استدعاء الموديل مع خاصية إعادة المحاولة (Retry)
         raw_text = call_model_with_retry(
-            model,
+            model_name,
             prompt,
             cfg,
             retries=3
         )
+        
+        # حفظ الرد الخام في الكاش للاستخدام المستقبلي
+        cache_set(APP_ID, content_hash, raw_text)
+
+        # =========================
+        # 3) تحليل النتيجة النهائية
+        # =========================
+        s, t = parse_gap_response(raw_text)
+
+        # التحقق النهائي لضمان وجود مواضيع
+        if not t:
+            return s, [], False, "Parsing failed: AI output was not in the correct '||' format. Please try again."
+
+        return s, t, False, None
+
     except Exception as e:
-        return "", [], False, str(e)
-
-    # =========================
-    # 4) CACHE WRITE
-    # =========================
-    cache_set(APP_ID, content_hash, raw_text)
-
-    # =========================
-    # 5) PARSE RESULT (هنا الإضافة المطلوبة)
-    # =========================
-    s, t = parse_gap_response(raw_text)
-
-    # الحماية الإضافية لضمان عدم حدوث خطأ Parsing failed
-    if not t:
-        return "", [], False, "Parsing failed: AI output format was incorrect"
-
-    return s, t, False, None
+        return "", [], False, f"Model Error: {str(e)}"
 # =========================================================
 # 9) CSS (Hide Streamlit header + RTL/LTR + Red button + Footer RTL)
 # =========================================================
@@ -705,6 +712,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
