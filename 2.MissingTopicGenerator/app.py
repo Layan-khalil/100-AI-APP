@@ -502,7 +502,7 @@ if "res_sum" in st.session_state:
 # =========================================================
 # 15) FEEDBACK UI (مع placeholders)
 # =========================================================
-st.divider()
+ st.divider()
  st.subheader("📝 Help us improve based on your feedback" if IS_EN else "📝 ساعدنا نطور الأداة بناءا على رأيك ")
 
         feedback_choice = st.radio(
@@ -576,4 +576,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
