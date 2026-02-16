@@ -169,29 +169,72 @@ def parse_gap_response(raw: str):
     if not raw:
         return "", []
 
+    # تنظيف أولي
+    raw = raw.replace("TOPICS :", "TOPICS:")
+    raw = raw.replace("SUMMARY :", "SUMMARY:")
+
     summary = ""
     topics = []
 
-    summary_match = re.search(r"(SUMMARY:|ملخص:)(.*?)(?=TOPICS:|المواضيع:|$)", raw, re.DOTALL | re.IGNORECASE)
+    # =========================
+    # استخراج SUMMARY
+    # =========================
+    summary_match = re.search(
+        r"(SUMMARY:|ملخص:)(.*?)(?=TOPICS:|المواضيع:|$)",
+        raw,
+        re.DOTALL | re.IGNORECASE
+    )
+
     if summary_match:
         summary = summary_match.group(2).strip()
 
+    # =========================
+    # استخراج جسم المواضيع
+    # =========================
     body = raw
-    topics_start = re.search(r"(TOPICS:|المواضيع:)\s*(.*)$", raw, re.DOTALL | re.IGNORECASE)
+    topics_start = re.search(
+        r"(TOPICS:|المواضيع:)\s*(.*)$",
+        raw,
+        re.DOTALL | re.IGNORECASE
+    )
+
     if topics_start:
         body = topics_start.group(2)
 
+    # =========================
+    # تقسيم الأسطر
+    # =========================
     lines = [l.strip() for l in body.splitlines() if l.strip()]
+
+    buffer_line = ""
+
     for line in lines:
-        line = re.sub(r"^(?:\d+[\.\)]\s*|[-*•]\s*)", "", line).strip()
-        if "||" in line:
-            parts = [p.strip() for p in line.split("||")]
-            if len(parts) >= 3:
-                topics.append({
-                    "topic_title": parts[0],
-                    "gap_reason": parts[1],
-                    "format_suggestion": " || ".join(parts[2:]).strip(),
-                })
+
+        # إزالة الترقيم أو الرموز
+        line = re.sub(r"^(?:\d+\s*[\.\)\-]\s*|[-*•]\s*)", "", line).strip()
+
+        # دمج الأسطر لو السبب نزل بسطر ثاني
+        if "||" not in line:
+            buffer_line += " " + line
+            continue
+
+        full_line = (buffer_line + " " + line).strip()
+        buffer_line = ""
+
+        parts = [p.strip() for p in full_line.split("||")]
+
+        if len(parts) >= 3:
+            topics.append({
+                "topic_title": parts[0],
+                "gap_reason": parts[1],
+                "format_suggestion": " || ".join(parts[2:]).strip(),
+            })
+
+    # =========================
+    # حماية إضافية
+    # =========================
+    if len(topics) < 2:
+        return summary, []
 
     return summary, topics
 
@@ -688,6 +731,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
