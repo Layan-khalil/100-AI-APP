@@ -292,51 +292,27 @@ def get_working_model_name():
 # =========================================================
 # 8) Grounding sources extraction (safe)
 # =========================================================
-def extract_sources(resp) -> list:
+def extract_sources(resp, limit: int = 5):
     sources = []
     try:
-        if not getattr(resp, "candidates", None):
-            return []
-        cand = resp.candidates[0]
-
-        # New / old naming differences
-        gm = None
-        if hasattr(cand, "grounding_metadata"):
-            gm = cand.grounding_metadata
-        elif hasattr(cand, "groundingMetadata"):
-            gm = cand.groundingMetadata
-
-        if not gm:
-            return []
-
-        attributions = None
-        if hasattr(gm, "grounding_attributions"):
-            attributions = gm.grounding_attributions
-        elif hasattr(gm, "groundingAttributions"):
-            attributions = gm.groundingAttributions
-
-        if not attributions:
-            return []
-
-        for a in attributions:
-            title = None
-            uri = None
-            if isinstance(a, dict):
-                title = a.get("title")
-                uri = a.get("uri")
-            else:
-                if hasattr(a, "title"):
-                    title = getattr(a, "title", None)
-                if hasattr(a, "uri"):
-                    uri = getattr(a, "uri", None)
-
-            if uri or title:
-                sources.append({
-                    "title": title or "Untitled",
-                    "uri": uri or ""
-                })
+        if resp.candidates and len(resp.candidates) > 0:
+            cand = resp.candidates[0]
+            if hasattr(cand, "groundingMetadata") and cand.groundingMetadata:
+                atts = getattr(cand.groundingMetadata, "groundingAttributions", []) or []
+                for a in atts[:limit]:
+                    # حسب شكل attribution عندك
+                    title = ""
+                    uri = ""
+                    if isinstance(a, dict):
+                        title = a.get("title", "") or ""
+                        uri = a.get("uri", "") or ""
+                    else:
+                        title = getattr(a, "title", "") or ""
+                        uri = getattr(a, "uri", "") or ""
+                    if title or uri:
+                        sources.append({"title": title, "uri": uri})
     except Exception:
-        return []
+        pass
     return sources
 
 # =========================================================
@@ -405,7 +381,7 @@ def check_saturation(content_idea: str, platform: str):
             payload = json.loads(cached)
             return payload.get("result", {}), payload.get("sources", [])
         except Exception:
-            pass
+            cached = None  # ✅ ignore corrupted cache
 
     # 2) local cache
     lc = local_cache_compute(content_hash, "")
@@ -414,7 +390,7 @@ def check_saturation(content_idea: str, platform: str):
             payload = json.loads(lc)
             return payload.get("result", {}), payload.get("sources", [])
         except Exception:
-            pass
+            lc = None  # ✅ ignore corrupted local cache
 
     cfg = types.GenerateContentConfig(
         system_instruction=build_system_prompt(),
@@ -434,44 +410,13 @@ def check_saturation(content_idea: str, platform: str):
                 config=cfg
             )
 
-            sources = extract_sources(resp)
-
-            # =========================
-            # ✅ FIX: stronger sanitization
-            # =========================
-            raw_text = (getattr(resp, "text", "") or "").strip()
-
-            # 1) remove markdown fences
-            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
-
-            # 2) remove control chars that break JSON
-            #    (this is the main cause of "Invalid control character")
-            raw_text = re.sub(r"[\x00-\x1F]+", " ", raw_text)
-
-            # 3) keep only first JSON object if model adds extra text
-            m = re.search(r"\{.*\}", raw_text, re.DOTALL)
-            if m:
-                raw_text = m.group(0).strip()
-
-            # 4) final trim
-            raw = sanitize_json_text(raw_text).strip() if raw_text else ""
-
+            sources = extract_sources(resp, limit=5)  # ✅ smaller payload
+            raw = sanitize_json_text(getattr(resp, "text", "") or "")
             if not raw:
                 return {"error": "Empty model response"}, []
 
-            # try parse
-            try:
-                result = json.loads(raw)
-            except json.JSONDecodeError:
-                # optional second attempt: sometimes model uses single quotes
-                raw2 = raw.replace("\u201c", '"').replace("\u201d", '"').replace("'", '"')
-                raw2 = re.sub(r"[\x00-\x1F]+", " ", raw2)
-                m2 = re.search(r"\{.*\}", raw2, re.DOTALL)
-                if m2:
-                    raw2 = m2.group(0).strip()
-                result = json.loads(raw2)
+            result = json.loads(raw)
 
-            # persist cache as JSON string
             payload_json = json.dumps(
                 {"result": result, "sources": sources},
                 ensure_ascii=False
@@ -480,7 +425,7 @@ def check_saturation(content_idea: str, platform: str):
             # save to local cache
             local_cache_compute(content_hash, payload_json)
 
-            # save to supabase cache (optional)
+            # save to supabase cache
             cache_set(APP_ID, content_hash, payload_json)
 
             return result, sources
@@ -488,11 +433,8 @@ def check_saturation(content_idea: str, platform: str):
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
             last_err = e
             time.sleep(INITIAL_DELAY * (attempt + 1))
-
         except json.JSONDecodeError as e:
-            # show short snippet for debugging
             return {"error": f"JSON parse failed: {e}"}, []
-
         except Exception as e:
             last_err = e
             time.sleep(INITIAL_DELAY * (attempt + 1))
@@ -729,4 +671,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
