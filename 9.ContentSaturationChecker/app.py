@@ -365,6 +365,75 @@ def sanitize_json_text(raw_text: str) -> str:
         t = t.replace("```json", "").replace("```", "").strip()
     return t
 
+def extract_first_json_object(text: str) -> str:
+    """يحاول اقتناص أول { ... } من أي نص."""
+    if not text:
+        return ""
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    return m.group(0).strip() if m else text.strip()
+
+def sanitize_json_text(text: str) -> str:
+    """تنظيف قوي للنص قبل json.loads."""
+    if not text:
+        return ""
+
+    t = text.strip()
+
+    # شيل كود بلوك إن ظهر
+    t = re.sub(r"^```json\s*", "", t, flags=re.IGNORECASE).strip()
+    t = re.sub(r"^```\s*", "", t).strip()
+    t = re.sub(r"\s*```$", "", t).strip()
+
+    # اقتناص JSON فقط إن كان فيه كلام زائد
+    t = extract_first_json_object(t)
+
+    # استبدال الاقتباسات الذكية
+    t = (t.replace("“", '"').replace("”", '"')
+           .replace("‘", "'").replace("’", "'"))
+
+    # حذف أحرف التحكم (سبب شائع لـ Invalid control character)
+    t = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", t)
+
+    return t.strip()
+
+def safe_json_loads(raw: str):
+    """
+    محاولة json.loads بشكل آمن.
+    ترجع (obj, error_str). إذا نجحت error_str = None
+    """
+    try:
+        return json.loads(raw), None
+    except json.JSONDecodeError as e:
+        return None, str(e)
+
+def repair_json_with_model(client, model_name: str, broken_json_text: str):
+    """
+    إصلاح JSON بواسطة الموديل (بدون google_search).
+    يرجع dict أو None
+    """
+    repair_prompt = f"""
+Fix the following JSON to be valid JSON.
+Return ONLY valid JSON (no markdown, no explanation).
+
+BROKEN_JSON:
+{broken_json_text}
+""".strip()
+
+    try:
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=repair_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                max_output_tokens=700,
+            ),
+        )
+        cleaned = sanitize_json_text(getattr(resp, "text", "") or "")
+        obj, err = safe_json_loads(cleaned)
+        return obj if not err else None
+    except Exception:
+        return None    
+
 def check_saturation(content_idea: str, platform: str):
     if not client:
         return {"error": "API connection failed"}, []
@@ -411,11 +480,29 @@ def check_saturation(content_idea: str, platform: str):
             )
 
             sources = extract_sources(resp, limit=5)  # ✅ smaller payload
-            raw = sanitize_json_text(getattr(resp, "text", "") or "")
-            if not raw:
-                return {"error": "Empty model response"}, []
+            raw0 = getattr(resp, "text", "") or ""
+            raw = sanitize_json_text(raw0)
 
-            result = json.loads(raw)
+            if not raw:
+                   return {"error": "Empty model response"}, []
+
+            result, err = safe_json_loads(raw)
+
+# ✅ محاولة ثانية: اقتناص JSON فقط + تنظيف مرة أخرى
+            if err:
+                raw2 = sanitize_json_text(extract_first_json_object(raw0))
+                result, err = safe_json_loads(raw2)
+
+# ✅ محاولة ثالثة: إصلاح JSON عبر الموديل (بدون Search)
+            if err:
+               fixed = repair_json_with_model(client, model_name, raw2 if 'raw2' in locals() else raw)
+               if fixed:
+                 result, err = fixed, None
+
+            if err:
+    # لعرض جزء صغير فقط للمساعدة
+               snippet = (raw[:220] + "…") if len(raw) > 220 else raw
+               return {"error": f"JSON parse failed: {err}. Snippet: {snippet}"}, []
 
             payload_json = json.dumps(
                 {"result": result, "sources": sources},
@@ -671,5 +758,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
