@@ -429,7 +429,7 @@ else:
     st.title("🚦 فحص الازدحام الزمني للمحتوى")
     st.subheader("يفحص إن كانت فكرتك مُشبعة حالياً — ويعطيك توصية واضحة ماذا تفعل الآن.")
 
-with st.expander("💡 How it works + example" if IS_EN else "💡 كيف تعمل الأداة؟ + مثال", expanded=False):
+with st.expander("💡 How it works " if IS_EN else "💡 كيف تعمل الأداة؟  ", expanded=False):
     if IS_EN:
         st.markdown("""
 This tool uses **Gemini + Google Search grounding** to scan very recent signals around your idea and estimate saturation on your chosen platform.
@@ -649,6 +649,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
