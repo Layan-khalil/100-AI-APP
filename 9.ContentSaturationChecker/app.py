@@ -158,20 +158,23 @@ textarea, input,
     padding-top: 14px;
     margin-top: 14px;
 }}
-
-/* Footer */
-.custom-footer {{
-    position: fixed;
-    left: 0;
-    bottom: 0;
+/* Footer always RTL like your tools */
+.footer-container {{
     width: 100%;
-    background-color: #f0f0f5;
-    color: #888888;
+    text-align: center;
+    margin-top: 45px;
+    padding-top: 20px;
+    border-top: 1px solid #666;
+    font-size: 13px;
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    direction: rtl !important;
+}}
+.footer-container, .footer-container * {{
+    direction: rtl !important;
     text-align: center !important;
-    padding: 10px;
-    font-size: 0.8em;
-    border-top: 1px solid #dddddd;
-    z-index: 1000;
 }}
 </style>
 """,
@@ -558,7 +561,7 @@ with col1:
     content_idea = st.text_area(
         idea_label,
         placeholder=idea_ph,
-        height=120,
+        height=260,
         key="content_idea_input",
     )
 
@@ -718,7 +721,11 @@ else:
 # 15) Footer (fixed HTML style)
 # =========================================================
 st.markdown(
-    '<div class="custom-footer">جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil</div>',
+    """
+<div class="footer-container">
+  <span>جميع الحقوق محفوظة © 2026 |</span>
+  <span>AI Product Builder - Layan Khalil</span>
+</div>
+""",
     unsafe_allow_html=True,
 )
-
