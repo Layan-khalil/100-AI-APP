@@ -1,347 +1,682 @@
 import streamlit as st
+import os
+import json
+import time
+import uuid
+import hashlib
+
 from google import genai
-from google.genai import types 
-from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded 
-import json 
-import time 
+from google.genai import types
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
 
-# =================================================================
-# 1. إعدادات الصفحة و RTL/Responsive CSS
-# =================================================================
+# (اختياري) Supabase لو متوفر في أدواتك السابقة
+try:
+    from supabase import create_client, Client
+except Exception:
+    create_client = None
+    Client = None
 
+# =========================================================
+# 0) Page config
+# =========================================================
 st.set_page_config(
-    page_title=" فحص الازدحام الزمني",
+    page_title="فحص الازدحام الزمني",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# قواعد CSS الشاملة لفرض RTL/تفادي القص وتطبيق التنسيق
-st.markdown("""
-<style>
-    /* ---------------------------------
-    *** قواعد CSS الشاملة لـ RTL والتنسيق ***
-    ----------------------------------- */
-    
-    html, body, .block-container, .stApp {
-        direction: rtl !important;
-    }
-    /* تعديل لضمان محاذاة كل النص لليمين */
-    h1, h2, h3, h4, h5, h6, p, .stMarkdown, .stText, .stCode, .st-emotion-cache-1jm6hrl { 
-        text-align: right !important;
-        direction: rtl !important;
-    }
-    
-    /* === إصلاح المحاذاة في حقول الإدخال لتكون الكتابة من اليمين === */
-    /* استهداف حقول النص والمناطق النصية وصناديق الاختيار لفرض RTL */
-    textarea, input, 
-    .stTextInput > div > div > input, 
-    .stTextArea > div > textarea,
-    .stSelectbox > label, .stSelectbox > div > div { 
-        direction: rtl !important;
-        text-align: right !important;
-    }
-    /* ------------------------------------ */
-    
-    .stTextArea {
-        height: 150px !important; 
-    }
+# =========================================================
+# 1) Language switch
+# =========================================================
+if "ui_lang" not in st.session_state:
+    st.session_state["ui_lang"] = "AR"
 
-    /* ---------------------------------
-    *** تنسيق زر الإجراء (Button Styling) ***
-    ----------------------------------- */
-    .stButton>button {
-        font-weight: bold;
-        width: 100%; 
-        direction: rtl !important;
-        background-color: #059669; /* أخضر جذاب */
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 10px 20px;
-        font-size: 1.1em;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 15px rgba(5, 150, 105, 0.4); 
-    }
-    .stButton>button:hover {
-        background-color: #047857; 
-        box-shadow: 0 6px 20px rgba(5, 150, 105, 0.6); 
-        transform: translateY(-2px); 
-    }
-    
-    /* ---------------------------------
-    *** تنسيق بطاقات النتيجة ***
-    ----------------------------------- */
-    .result-card {
-        padding: 20px;
-        border-radius: 12px;
-        margin-top: 20px;
-        box-shadow: 0 6px 15px rgba(0,0,0,0.1);
-    }
-    .status-header {
-        font-size: 1.5em;
-        font-weight: bold;
-        padding: 10px;
-        border-radius: 6px;
-        margin-bottom: 15px;
-        text-align: center !important;
-        color: white;
-    }
-    
-    /* ألوان الحالة */
-    .status-high { background-color: #dc2626; } /* أحمر */
-    .status-medium { background-color: #f59e0b; } /* أصفر/برتقالي */
-    .status-low { background-color: #10b981; } /* أخضر */
+lang_choice = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
+st.session_state["ui_lang"] = "EN" if lang_choice else "AR"
+IS_EN = (st.session_state["ui_lang"] == "EN")
 
-    .analysis-section {
-        border-top: 1px solid #eee;
-        padding-top: 15px;
-        margin-top: 15px;
-        /* التأكد من محاذاة كل النص في هذا القسم لليمين */
-        text-align: right !important; 
-        direction: rtl !important;
-    }
-    .analysis-section p {
-        text-align: right !important;
-        direction: rtl !important;
-    }
-    
-    /* ---------------------------------
-    *** تنسيق حقوق النشر (الـ Footer المُعزز) ***
-    ----------------------------------- */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+DIR = "ltr" if IS_EN else "rtl"
+ALIGN = "left" if IS_EN else "right"
 
-    .custom-footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        background-color: #f0f0f5; 
-        color: #888888;
-        text-align: center !important; 
-        padding: 10px;
-        font-size: 0.8em;
-        border-top: 1px solid #dddddd;
-        z-index: 1000; 
-    }
+# =========================================================
+# 2) Secrets helper
+# =========================================================
+def get_secret(key: str, default: str = "") -> str:
+    if key in st.secrets:
+        return str(st.secrets.get(key, default))
+    return str(os.environ.get(key, default))
 
-</style>
-""", unsafe_allow_html=True)
+GEMINI_API_KEY = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
 
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
 
-# =================================================================
-# 2. تهيئة نموذج Gemini 
-# =================================================================
+# =========================================================
+# 3) Initialize clients
+# =========================================================
 client = None
-MAX_RETRIES = 5 
-INITIAL_DELAY = 5
-
 try:
-    API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-    if not API_KEY:
-        st.warning("⚠️ لم يتم العثور على مفتاح GEMINI_API_KEY. يرجى إضافته إلى ملف secrets.toml.")
-    else:
-        client = genai.Client(api_key=API_KEY)
+    if not GEMINI_API_KEY:
+        st.error("⚠️ Missing GEMINI_API_KEY / GOOGLE_API_KEY in Secrets or Environment Variables.")
+        st.stop()
+    client = genai.Client(api_key=GEMINI_API_KEY)
 except Exception as e:
-    st.error(f"خطأ غير متوقع أثناء التهيئة: {e}")
-    client = None
+    st.error(f"API connection failed: {e}")
+    st.stop()
 
-# =================================================================
-# 3. دالة فحص الازدحام الزمني 
-# =================================================================
+supabase = None
+APP_ID = "time-saturation-checker-v1"
 
-def check_saturation(content_idea, platform):
-    """
-    تستخدم نموذج Gemini مع Google Search Grounding لتحليل ازدحام الموضوع.
-    تم إزالة الإخراج المُنظم JSON نهائياً لتجنب التعارض مع خاصية البحث، وإضافة فحص آمن لـ groundingMetadata.
-    """
+if SUPABASE_URL and SUPABASE_KEY and create_client:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception:
+        supabase = None
+
+# =========================================================
+# 4) CSS (Hide Streamlit header + RTL/LTR + style)
+# =========================================================
+st.markdown(
+    f"""
+<style>
+/* Hide Streamlit UI */
+#MainMenu {{ visibility: hidden; }}
+footer {{ visibility: hidden; }}
+header {{ visibility: hidden; }}
+div[data-testid="stToolbar"] {{ visibility: hidden; }}
+div[data-testid="stStatusWidget"] {{ visibility: hidden; }}
+div[data-testid="stDecoration"] {{ visibility: hidden; }}
+div[class*="viewerBadge_container"] {{ display: none !important; }}
+div[class*="viewerBadge_link"] {{ display: none !important; }}
+div[class*="viewerBadge_text"] {{ display: none !important; }}
+
+/* Global direction */
+html, body, [data-testid="stAppViewContainer"], .main {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    font-family: "Cairo", sans-serif !important;
+}}
+
+h1,h2,h3,h4,h5,h6,p,div,span,label,li,[data-testid="stMarkdownContainer"] {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+    unicode-bidi: plaintext !important;
+    line-height: 1.75 !important;
+}}
+
+/* Inputs direction */
+textarea, input,
+.stTextInput > div > div > input,
+.stTextArea > div > textarea {{
+    direction: {DIR} !important;
+    text-align: {ALIGN} !important;
+}}
+
+/* Button */
+.stButton>button {{
+    font-weight: 800 !important;
+    width: 100% !important;
+    background-color: #059669 !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 11px 18px !important;
+    font-size: 1.05em !important;
+    transition: all 0.25s ease !important;
+    box-shadow: 0 4px 15px rgba(5, 150, 105, 0.35) !important;
+}}
+.stButton>button:hover {{
+    background-color: #047857 !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(5, 150, 105, 0.55) !important;
+}}
+
+/* Result card */
+.result-card {{
+    padding: 20px;
+    border-radius: 12px;
+    margin-top: 20px;
+    box-shadow: 0 6px 15px rgba(0,0,0,0.08);
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(0,0,0,0.06);
+}}
+.status-header {{
+    font-size: 1.3em;
+    font-weight: 900;
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    text-align: center !important;
+    color: #ffffff !important;
+}}
+.status-high {{ background-color: #dc2626; }}
+.status-medium {{ background-color: #f59e0b; }}
+.status-low {{ background-color: #10b981; }}
+
+.analysis-section {{
+    border-top: 1px solid rgba(0,0,0,0.08);
+    padding-top: 14px;
+    margin-top: 14px;
+}}
+
+/* Footer */
+.custom-footer {{
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background-color: #f0f0f5;
+    color: #888888;
+    text-align: center !important;
+    padding: 10px;
+    font-size: 0.8em;
+    border-top: 1px solid #dddddd;
+    z-index: 1000;
+}}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# 5) Tracking + Feedback (Supabase optional)
+# =========================================================
+def get_session_visitor_id() -> str:
+    if "visitor_id" not in st.session_state:
+        st.session_state["visitor_id"] = str(uuid.uuid4())
+    return st.session_state["visitor_id"]
+
+def track_visit():
+    if not supabase:
+        return
+    try:
+        supabase.rpc("track_visit", {"p_app_id": APP_ID, "p_visitor_id": get_session_visitor_id()}).execute()
+    except Exception:
+        pass
+
+def track_cta_event():
+    if not supabase:
+        return
+    try:
+        supabase.rpc("increment_cta", {"p_app_id": APP_ID}).execute()
+    except Exception:
+        pass
+
+def save_feedback_via_rpc(app_name, useful, missing_reason, problem_text, helpful_reason, must_use_text):
+    if not supabase:
+        raise RuntimeError("Supabase not configured")
+    return supabase.rpc("submit_app_feedback", {
+        "p_app_name": app_name,
+        "p_useful": useful,
+        "p_missing_reason": missing_reason,
+        "p_problem_text": problem_text,
+        "p_helpful_reason": helpful_reason,
+        "p_must_use_text": must_use_text,
+    }).execute()
+
+track_visit()
+
+# =========================================================
+# 6) Cache helpers (local cache + optional Supabase cache table)
+# =========================================================
+def get_hash(*parts: str) -> str:
+    normalized = "||".join([" ".join((p or "").strip().split()) for p in parts])
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+def cache_get(app_id: str, content_hash: str):
+    # 1) Try Supabase cache if exists
+    if supabase:
+        try:
+            res = (
+                supabase.table("viral_scores_cache")
+                .select("analysis_text")
+                .eq("app_id", app_id)
+                .eq("content_hash", content_hash)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return res.data[0].get("analysis_text")
+        except Exception:
+            pass
+    return None
+
+def cache_set(app_id: str, content_hash: str, analysis_text: str):
+    if not supabase:
+        return
+    try:
+        supabase.table("viral_scores_cache").insert({
+            "app_id": app_id,
+            "content_hash": content_hash,
+            "analysis_text": analysis_text
+        }).execute()
+    except Exception:
+        pass
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 6)
+def local_cache_compute(content_hash: str, payload_json: str) -> str:
+    # مجرد حامل، لأن st.cache_data يحتاج args
+    return payload_json
+
+# =========================================================
+# 7) Model selection (flexible fallback)
+# =========================================================
+MODEL_CANDIDATES = [
+    get_secret("MODEL_NAME", "").strip(),
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-001",
+]
+MODEL_CANDIDATES = [m for m in MODEL_CANDIDATES if m]
+
+@st.cache_resource
+def get_working_model_name():
+    # نجرب نموذج واحد صغير مع google_search config (لأن أداتنا تعتمد عليها)
+    test_prompt = "Return ONLY JSON: {\"ok\": true}"
+    cfg = types.GenerateContentConfig(
+        system_instruction="Return ONLY JSON.",
+        tools=[{"google_search": {}}],
+    )
+    last_err = None
+    for m in MODEL_CANDIDATES:
+        try:
+            _ = client.models.generate_content(model=m, contents=test_prompt, config=cfg)
+            return m
+        except Exception as e:
+            last_err = e
+            continue
+    raise RuntimeError(f"No working Gemini model found. Last error: {last_err}")
+
+# =========================================================
+# 8) Grounding sources extraction (safe)
+# =========================================================
+def extract_sources(resp) -> list:
+    sources = []
+    try:
+        if not getattr(resp, "candidates", None):
+            return []
+        cand = resp.candidates[0]
+
+        # New / old naming differences
+        gm = None
+        if hasattr(cand, "grounding_metadata"):
+            gm = cand.grounding_metadata
+        elif hasattr(cand, "groundingMetadata"):
+            gm = cand.groundingMetadata
+
+        if not gm:
+            return []
+
+        attributions = None
+        if hasattr(gm, "grounding_attributions"):
+            attributions = gm.grounding_attributions
+        elif hasattr(gm, "groundingAttributions"):
+            attributions = gm.groundingAttributions
+
+        if not attributions:
+            return []
+
+        for a in attributions:
+            title = None
+            uri = None
+            if isinstance(a, dict):
+                title = a.get("title")
+                uri = a.get("uri")
+            else:
+                if hasattr(a, "title"):
+                    title = getattr(a, "title", None)
+                if hasattr(a, "uri"):
+                    uri = getattr(a, "uri", None)
+
+            if uri or title:
+                sources.append({
+                    "title": title or "Untitled",
+                    "uri": uri or ""
+                })
+    except Exception:
+        return []
+    return sources
+
+# =========================================================
+# 9) Core function: saturation check (with caching + retries)
+# =========================================================
+MAX_RETRIES = 4
+INITIAL_DELAY = 2
+
+def build_system_prompt() -> str:
+    if IS_EN:
+        return (
+            "Act as a professional Content Trend Analyst specializing in social media saturation. "
+            "Use Google Search grounding. Determine saturation level for the topic on the specified platform. "
+            "Return ONLY a JSON object with EXACT keys: "
+            "'SaturationLevel' (Low/Medium/High), 'Recommendation' (Publish Now/Postpone/Adapt), 'Justification'. "
+            "No markdown. No extra text."
+        )
+    return (
+        "تصرّف كخبير تحليل ترندات متخصص في قياس ازدحام الأفكار على منصات السوشال ميديا. "
+        "استخدم Google Search grounding. حدّد مستوى الازدحام للفكرة على المنصة. "
+        "أعد النتيجة فقط بصيغة JSON وبالمفاتيح التالية حصراً: "
+        "'SaturationLevel' (منخفض/متوسط/مرتفع), 'Recommendation' (انشر الآن/أجّل النشر/عدّل الزاوية), 'Justification'. "
+        "ممنوع Markdown أو نص إضافي."
+    )
+
+def build_user_prompt(content_idea: str, platform: str) -> str:
+    if IS_EN:
+        return f"""
+Analyze saturation for this idea on the target platform using very recent signals from search.
+
+Idea: {content_idea}
+Platform: {platform}
+
+Return ONLY JSON with keys:
+SaturationLevel, Recommendation, Justification
+"""
+    return f"""
+حلّل مستوى الازدحام (Saturation) للفكرة التالية على المنصة المحددة بالاعتماد على إشارات حديثة جداً من البحث.
+
+الفكرة: {content_idea}
+المنصة: {platform}
+
+أعد فقط JSON بالمفاتيح:
+SaturationLevel, Recommendation, Justification
+"""
+
+def sanitize_json_text(raw_text: str) -> str:
+    t = (raw_text or "").strip()
+    if t.startswith("```"):
+        t = t.replace("```json", "").replace("```", "").strip()
+    return t
+
+def check_saturation(content_idea: str, platform: str):
     if not client:
-        return {"error": "فشل الاتصال بـ Gemini API."}, []
+        return {"error": "API connection failed"}, []
 
-    # تعليمات النظام: تفرض إخراج JSON خام بدون أي إضافات، وهو الآن الطريقة الوحيدة لتمكين البحث
-    system_prompt = (
-        "Act as a professional Content Trend Analyst specializing in social media saturation. "
-        "Your task is to analyze the user's content idea against recent online activity (using Google Search grounding). "
-        "Determine the current saturation level of the topic on the specified platform (Low, Medium, or High). "
-        "Provide a clear recommendation (Publish Now, Postpone, or Adapt) and a justification based on your analysis. "
-        "The output MUST be a structured JSON object in Arabic, containing ONLY the keys: 'SaturationLevel', 'Recommendation', and 'Justification'. "
-        "Do not include any introductory text, closing remarks, or Markdown code fences (```json or ```)."
+    model_name = get_working_model_name()
+
+    # cache key includes language
+    content_hash = get_hash(APP_ID, content_idea, platform, st.session_state["ui_lang"])
+
+    # 1) Supabase cache
+    cached = cache_get(APP_ID, content_hash)
+    if cached:
+        try:
+            payload = json.loads(cached)
+            return payload.get("result", {}), payload.get("sources", [])
+        except Exception:
+            pass
+
+    # 2) local cache
+    lc = local_cache_compute(content_hash, "")
+    if lc:
+        try:
+            payload = json.loads(lc)
+            return payload.get("result", {}), payload.get("sources", [])
+        except Exception:
+            pass
+
+    cfg = types.GenerateContentConfig(
+        system_instruction=build_system_prompt(),
+        tools=[{"google_search": {}}],
+        temperature=0.2,
+        max_output_tokens=900,
     )
 
-    # الاستعلام للمستخدم
-    prompt = f"""
-    قم بتحليل مستوى الازدحام (Saturation) للمحتوى المقترح التالي على المنصة المحددة.
-    
-    * **الفكرة/الموضوع:** {content_idea}
-    * **المنصة المستهدفة:** {platform}
-    
-    اعتمد في تحليلك على الترندات والمنشورات الحديثة جداً التي تجدها عبر البحث.
-    """
-    
-    # Configuration: يحتوي الآن على system_instruction و tools فقط
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        tools=[{"google_search": {}}]
-    )
+    prompt = build_user_prompt(content_idea, platform)
 
-    # حلقة إعادة المحاولة
+    last_err = None
     for attempt in range(MAX_RETRIES):
         try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=config 
-            )
-            
-            # Extract Grounding Sources (FIX: Use hasattr for safe access)
-            sources = []
-            if response.candidates and response.candidates[0]:
-                candidate = response.candidates[0]
-                # التحقق الآمن مما إذا كانت الخاصية موجودة قبل محاولة الوصول إليها
-                if hasattr(candidate, 'groundingMetadata') and candidate.groundingMetadata:
-                    sources = candidate.groundingMetadata.groundingAttributions
-            
-            # === JSON Sanitization and Parsing (CRUCIAL now) ===
-            raw_text = response.text.strip()
-            
-            # إزالة علامات الكود ماركداون المحتملة إذا أخطأ النموذج
-            if raw_text.startswith("```json"):
-               if raw_text.endswith("```"):
-                     raw_text = raw_text[:-len("```")].strip()
-                
-            # محاولة قراءة JSON
-            try:
-                if raw_text:
-                    result = json.loads(raw_text)
-                    return result, sources
-                else:
-                    return {"error": "استجابة النموذج كانت فارغة أو تم مسحها أثناء التنظيف."}, []
-            except json.JSONDecodeError as json_err:
-                # إذا فشل التحليل، نعرض النص الخام للمساعدة في التصحيح
-                return {"error": f"فشل تحليل استجابة JSON: {json_err}. النص الخام: {raw_text[:200]}..."}, []
+            resp = client.models.generate_content(model=model_name, contents=prompt, config=cfg)
+            sources = extract_sources(resp)
+            raw = sanitize_json_text(getattr(resp, "text", "") or "")
+            if not raw:
+                return {"error": "Empty model response"}, []
+
+            result = json.loads(raw)
+            # persist cache as JSON string
+            payload_json = json.dumps({"result": result, "sources": sources}, ensure_ascii=False)
+
+            # save to local cache
+            local_cache_compute(content_hash, payload_json)
+
+            # save to supabase cache (optional)
+            cache_set(APP_ID, content_hash, payload_json)
+
+            return result, sources
 
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
-            if attempt < MAX_RETRIES - 1:
-                delay = INITIAL_DELAY * (2 ** attempt) 
-                st.warning(f"⚠️ فشلت المحاولة {attempt + 1} بسبب ضغط الخادم. سيتم إعادة المحاولة بعد {delay} ثواني...")
-                time.sleep(delay)
-            else:
-                st.error(f"خطأ بالتوليد (API): فشلت جميع المحاولات. التفاصيل: {e}")
-                return {"error": str(e)}, []
+            last_err = e
+            time.sleep(INITIAL_DELAY * (attempt + 1))
+        except json.JSONDecodeError as e:
+            # helpful error
+            return {"error": f"JSON parse failed: {e}"}, []
         except Exception as e:
-            st.error(f"خطأ غير متوقع: {e}")
-            return {"error": str(e)}, []
+            last_err = e
+            time.sleep(INITIAL_DELAY * (attempt + 1))
 
-    return {"error": "فشل غير محدد في توليد المحتوى بعد محاولات متعددة."}, []
+    return {"error": str(last_err) if last_err else "Unknown error"}, []
 
+# =========================================================
+# 10) UI copy (AR/EN) + Expander
+# =========================================================
+if IS_EN:
+    st.title("🚦 Content Saturation Checker")
+    st.subheader("Checks whether your idea is over-posted right now — and what you should do next.")
+else:
+    st.title("🚦 فحص الازدحام الزمني للمحتوى")
+    st.subheader("يفحص إن كانت فكرتك مُشبعة حالياً — ويعطيك توصية واضحة ماذا تفعل الآن.")
 
-# =================================================================
-# 4. واجهة المستخدم (Streamlit UI)
-# =================================================================
+with st.expander("💡 How it works + example" if IS_EN else "💡 كيف تعمل الأداة؟ + مثال", expanded=False):
+    if IS_EN:
+        st.markdown("""
+This tool uses **Gemini + Google Search grounding** to scan very recent signals around your idea and estimate saturation on your chosen platform.
 
-st.title("🚦 فحص الازدحام الزمني للمحتوى")
-st.subheader("تحليل ترندات النشر وتحديد التوقيت الأمثل لنجاح فكرتك.")
+### What you get
+- **SaturationLevel:** Low / Medium / High  
+- **Recommendation:** Publish Now / Adapt / Postpone  
+- **Justification:** short reasoning you can act on
 
-# === 🌟 الشرح التفصيلي للهدف ===
-with st.expander("💡 كيف تعمل الأداة؟"):
-    st.markdown("""
-        تستخدم هذه الأداة **نموذج Gemini** لـ **البحث في جوجل (Grounding)** بشكل مباشر عن الترندات الحديثة والمنشورات الأخيرة المتعلقة بفكرتك ومقارنتها بالمنصة المستهدفة.
-        
-        **الهدف:** تحديد ما إذا كان الموضوع مُشبعاً (Over-saturated) أو "مُتعباً" للجمهور حالياً.
-        
-        **مستويات الازدحام والتوصيات:**
-        
-        * 🟢 **منخفض:** الموضوع غير مُغطى بكثرة حالياً. (انشر الآن)
-        * 🟡 **متوسط:** يوجد اهتمام لكن يمكنك التميز بتعديل الزاوية. (عدّل الفكرة)
-        * 🔴 **مرتفع:** الموضوع مُغطى بكثافة في هذه الفترة. (أجل النشر)
-    """)
+### Example
+**Idea:** “AI is replacing entry-level marketing tasks”  
+**Platform:** LinkedIn  
+If the topic is everywhere this week → **High** → **Postpone** or **Adapt** (pick a sharper angle, add a case study, or target a smaller niche).
+""")
+    else:
+        st.markdown("""
+هذه الأداة تستخدم **Gemini + بحث جوجل (Grounding)** لفحص إشارات حديثة جداً حول فكرتك وتقدير مستوى الازدحام على المنصة التي اخترتها.
+
+### ماذا ستأخذ من الأداة؟
+- **مستوى الازدحام:** منخفض / متوسط / مرتفع  
+- **التوصية:** انشر الآن / عدّل الزاوية / أجّل النشر  
+- **التبرير:** سبب واضح يساعدك تتخذ قرار سريع
+
+### مثال صغير
+**الفكرة:** “الذكاء الاصطناعي يغيّر وظائف التسويق للمبتدئين”  
+**المنصة:** LinkedIn  
+إذا كان الموضوع منتشر بكثافة هذا الأسبوع → **مرتفع** → الأفضل **تأجيله** أو **تعديل الزاوية** (تجربة شخصية، دراسة حالة، أو استهداف نيتش أضيق).
+""")
 
 st.markdown("---")
 
-# ----------------------------------------------------
-# منطقة الإدخال
-# ----------------------------------------------------
+# =========================================================
+# 11) Inputs
+# =========================================================
 col1, col2 = st.columns([3, 1])
+
+if IS_EN:
+    idea_ph = "Write your idea clearly (2–6 lines is perfect)."
+    idea_label = "Your content idea:"
+    plat_label = "Target platform:"
+    btn_label = "🔍 Check saturation now"
+else:
+    idea_ph = "اكتب فكرتك بوضوح (2–6 أسطر ممتاز)."
+    idea_label = "الفكرة/الموضوع الذي تريد فحصه:"
+    plat_label = "المنصة المستهدفة:"
+    btn_label = "🔍 فحص الازدحام الآن"
 
 with col1:
     content_idea = st.text_area(
-        "الفكرة/الموضوع الذي تريد فحصه:", 
-        placeholder="مثلاً: تأثير الذكاء الاصطناعي التوليدي على وظائف المحاسبين في الربع الأخير.",
-        height=100,
-        key="content_idea_input"
+        idea_label,
+        placeholder=idea_ph,
+        height=120,
+        key="content_idea_input",
     )
 
 with col2:
     platform = st.selectbox(
-        "المنصة المستهدفة:", 
-        options=['LinkedIn', 'X (Twitter)', 'TikTok', 'Instagram', 'Facebook', 'المدونات والمقالات'],
-        key="platform_select"
+        plat_label,
+        options=["LinkedIn", "X (Twitter)", "TikTok", "Instagram", "Facebook", "Blogs / Articles"] if IS_EN
+        else ["LinkedIn", "X (Twitter)", "TikTok", "Instagram", "Facebook", "المدونات والمقالات"],
+        key="platform_select",
     )
 
-# ----------------------------------------------------
-# زر التشغيل
-# ----------------------------------------------------
-if st.button("🔍 فحص الازدحام الزمني الآن", width='stretch'):
-    if not content_idea:
-        st.warning("الرجاء إدخال فكرة المحتوى أولاً للمتابعة.")
+# =========================================================
+# 12) Run button
+# =========================================================
+if st.button(btn_label, use_container_width=True):
+    if not content_idea or len(content_idea.strip()) < 10:
+        st.warning("Please write a real idea (at least 10 chars)." if IS_EN else "اكتب فكرة حقيقية (على الأقل 10 أحرف).")
         st.stop()
-    
-    with st.spinner("جاري تحليل الترندات الحديثة ومستويات الازدحام عبر الإنترنت... (قد يستغرق 10-15 ثانية)"):
-        # استدعاء دالة التحليل
-        analysis_data, sources = check_saturation(content_idea, platform)
 
-    if analysis_data and "error" in analysis_data:
-        st.error(f"فشل التحليل: {analysis_data['error']}")
-    
-    elif analysis_data:
+    track_cta_event()
+
+    with st.spinner("Analyzing recent signals..." if IS_EN else "جاري تحليل إشارات حديثة جداً..."):
+        analysis_data, sources = check_saturation(content_idea.strip(), platform)
+
+    st.session_state["has_result"] = True
+    st.session_state["analysis_data"] = analysis_data
+    st.session_state["sources"] = sources
+
+# =========================================================
+# 13) Show results
+# =========================================================
+if st.session_state.get("has_result"):
+    analysis_data = st.session_state.get("analysis_data", {}) or {}
+    sources = st.session_state.get("sources", []) or []
+
+    if "error" in analysis_data:
+        st.error(("Analysis failed: " if IS_EN else "فشل التحليل: ") + str(analysis_data["error"]))
+    else:
         st.markdown("---")
-        st.markdown("## 📊 نتائج تحليل الازدحام الزمني")
+        st.markdown("## 📊 Results" if IS_EN else "## 📊 نتائج التحليل")
 
-        # تعيين الحالة واللون
-        level = analysis_data.get("SaturationLevel", "غير محدد")
-        
-        if level == "مرتفع":
-            status_class = "status-high"
-            status_emoji = "🔴"
-        elif level == "متوسط":
-            status_class = "status-medium"
-            status_emoji = "🟡"
-        else: # منخفض أو غير محدد
-            status_class = "status-low"
-            status_emoji = "🟢"
+        level = (analysis_data.get("SaturationLevel") or "").strip()
 
-        # عرض بطاقة النتيجة
-        st.markdown(f'<div class="result-card">', unsafe_allow_html=True)
-        
-        # عرض مستوى الازدحام والتوصية
-        st.markdown(f'<div class="{status_class} status-header">{status_emoji} مستوى الازدحام: {level}</div>', unsafe_allow_html=True)
-        st.info(f'**✅ التوصية:** {analysis_data.get("Recommendation", "لا توجد توصية.")}')
-        
-        # عرض التحليل والتبرير
+        # normalize status mapping for both languages
+        level_low = ["Low", "منخفض"]
+        level_med = ["Medium", "متوسط"]
+        level_high = ["High", "مرتفع"]
+
+        if level in level_high:
+            status_class, status_emoji = "status-high", "🔴"
+        elif level in level_med:
+            status_class, status_emoji = "status-medium", "🟡"
+        else:
+            status_class, status_emoji = "status-low", "🟢"
+
+        rec = analysis_data.get("Recommendation", "—")
+        just = analysis_data.get("Justification", "—")
+
+        st.markdown('<div class="result-card">', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="{status_class} status-header">{status_emoji} '
+            + (f"Saturation level: {level}" if IS_EN else f"مستوى الازدحام: {level}")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+        st.info((f"✅ Recommendation: {rec}" if IS_EN else f"✅ التوصية: {rec}"))
+
         st.markdown('<div class="analysis-section">', unsafe_allow_html=True)
-        st.markdown('**تفسير وتبرير التحليل:**')
-        st.markdown(analysis_data.get("Justification", "لا يوجد تبرير من النموذج."))
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(("**Justification:**" if IS_EN else "**تفسير وتبرير التحليل:**"))
+        st.markdown(just)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        # عرض مصادر البحث المستخدمة (Grounding)
+        # sources
         if sources:
             st.markdown("---")
-            st.markdown("#### 🌐 مصادر البحث المستخدمة:")
-            source_list = ""
-            for i, source in enumerate(sources):
-                title = source.get('title', 'لا يوجد عنوان')
-                uri = source.get('uri', '#')
-                source_list += f'{i+1}. [{title}]({uri})\n'
-            st.markdown(source_list)
+            st.markdown("#### 🌐 Sources used" if IS_EN else "#### 🌐 مصادر البحث المستخدمة")
+            for i, s in enumerate(sources, start=1):
+                title = s.get("title", "Untitled")
+                uri = s.get("uri", "")
+                if uri:
+                    st.markdown(f"{i}. [{title}]({uri})")
+                else:
+                    st.markdown(f"{i}. {title}")
 
+# =========================================================
+# 14) Feedback UI (Supabase optional)
+# =========================================================
+st.markdown("---")
+st.subheader("📝 Feedback" if IS_EN else "📝 فيدباك")
 
-# =================================================================
-# 5. التذييل (Footer)
-# =================================================================
+if not supabase:
+    st.caption("Feedback saving is disabled (Supabase not configured)." if IS_EN else "حفظ الفيدباك غير مفعل (Supabase غير مضبوط).")
+else:
+    feedback_choice = st.radio(
+        "How was your experience?" if IS_EN else "كيف كانت تجربتك مع هذه الأداة؟",
+        ("This tool was useful for me", "This tool was not useful") if IS_EN
+        else ("هذه الأداة كانت مفيدة بالنسبة لي", "هذه الأداة لم تكن مفيدة"),
+        key=f"{APP_ID}_feedback_choice",
+    )
+
+    useful = (feedback_choice == ("This tool was useful for me" if IS_EN else "هذه الأداة كانت مفيدة بالنسبة لي"))
+
+    missing_reason = None
+    if not useful:
+        missing_reason = st.text_input(
+            "What was missing? (one sentence)" if IS_EN else "ما الذي كان ناقصاً؟ (جملة واحدة)",
+            max_chars=200,
+            key=f"{APP_ID}_missing_reason",
+        )
+
+    with st.expander("💬 Quick feedback (3 questions)" if IS_EN else "💬 فيدباك سريع (3 أسئلة)", expanded=False):
+        problem_text = st.text_area(
+            "1) What were you trying to decide?" if IS_EN else "1) ما القرار الذي كنت تحاول اتخاذه؟",
+            max_chars=280,
+            key=f"{APP_ID}_problem_text",
+        )
+        helpful_reason = st.text_area(
+            "2) Did it help? Why yes/no?" if IS_EN else "2) هل ساعدتك الأداة؟ لماذا نعم/لا؟",
+            max_chars=280,
+            key=f"{APP_ID}_helpful_reason",
+        )
+        must_use_text = st.text_area(
+            "3) What would make this a must-use tool?" if IS_EN else "3) ما الذي سيجعل هذه الأداة «لازم تُستخدم»؟",
+            max_chars=280,
+            key=f"{APP_ID}_must_use_text",
+        )
+
+        submit_feedback = st.button("✅ Submit feedback" if IS_EN else "✅ إرسال الفيدباك", key=f"{APP_ID}_submit_feedback")
+
+        if submit_feedback:
+            has_any_text = any([
+                (missing_reason or "").strip(),
+                (problem_text or "").strip(),
+                (helpful_reason or "").strip(),
+                (must_use_text or "").strip(),
+            ])
+
+            if (not useful) and (not has_any_text):
+                st.warning("Write at least one line 🙏" if IS_EN else "اكتب سطر واحد على الأقل 🙏")
+            else:
+                try:
+                    save_feedback_via_rpc(
+                        app_name=APP_ID,
+                        useful=useful,
+                        missing_reason=(missing_reason or "").strip() or None,
+                        problem_text=(problem_text or "").strip() or None,
+                        helpful_reason=(helpful_reason or "").strip() or None,
+                        must_use_text=(must_use_text or "").strip() or None,
+                    )
+                    st.success("Feedback saved ✅ Thank you!" if IS_EN else "تم حفظ الفيدباك ✅ شكرًا لك!")
+                except Exception as e:
+                    st.error(("Feedback error: " if IS_EN else "خطأ في حفظ الفيدباك: ") + str(e))
+
+# =========================================================
+# 15) Footer (fixed HTML style)
+# =========================================================
 st.markdown(
-    '<div class="custom-footer">جميع الحقوق محفوظة © 2026 | AI Product Creator - Layan Khalil</div>', 
-    unsafe_allow_html=True
+    '<div class="custom-footer">جميع الحقوق محفوظة © 2026 | AI Product Builder - Layan Khalil</div>',
+    unsafe_allow_html=True,
 )
