@@ -424,7 +424,7 @@ def check_saturation(content_idea: str, platform: str):
 # =========================================================
 if IS_EN:
     st.title("🚦 Content Saturation Checker")
-    st.subheader("Checks whether your idea is over-posted right now — and what you should do next.")
+    st.caption("Checks whether your idea is over-posted right now — and what you should do next.")
 else:
     st.title("🚦 فحص الازدحام الزمني للمحتوى")
     st.subheader("يفحص إن كانت فكرتك مُشبعة حالياً — ويعطيك توصية واضحة ماذا تفعل الآن.")
@@ -649,6 +649,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
