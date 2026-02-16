@@ -467,12 +467,12 @@ st.markdown("---")
 col1, col2 = st.columns([3, 1])
 
 if IS_EN:
-    idea_ph = "Write your idea clearly (2–6 lines is perfect)."
+    idea_ph ="Example: A content idea sharing a personal insight or opinion about AI and its impact on work or content creation."
     idea_label = "Your content idea:"
     plat_label = "Target platform:"
     btn_label = "🔍 Check saturation now"
 else:
-    idea_ph = "اكتب فكرتك بوضوح (2–6 أسطر ممتاز)."
+    idea_ph = "مثال: فكرة محتوى تشرح تجربة شخصية أو رأي حول الذكاء الاصطناعي وتأثيره على العمل أو صناعة المحتوى."
     idea_label = "الفكرة/الموضوع الذي تريد فحصه:"
     plat_label = "المنصة المستهدفة:"
     btn_label = "🔍 فحص الازدحام الآن"
@@ -649,6 +649,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
