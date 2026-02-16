@@ -489,81 +489,143 @@ if st.button(BTN):
 # =========================================================
 # 14) RESULTS
 # =========================================================
+# =========================================================
+# RESULTS
+# =========================================================
 if "res_sum" in st.session_state:
     st.markdown("---")
+
     st.subheader("📊 Summary" if IS_EN else "📊 ملخص التحليل")
     st.info(st.session_state["res_sum"] or "—")
 
     st.subheader("🧩 Suggested missing topics" if IS_EN else "🧩 المواضيع المقترحة")
+
     df = pd.DataFrame(st.session_state["res_top"])
-    df.columns = ["Topic" if IS_EN else "الموضوع", "Why it matters" if IS_EN else "سبب الأهمية", "Best format" if IS_EN else "الشكل المقترح"]
+    df.columns = [
+        "Topic" if IS_EN else "الموضوع",
+        "Why it matters" if IS_EN else "سبب الأهمية",
+        "Best format" if IS_EN else "الشكل المقترح",
+    ]
     st.table(df)
 
-# =========================================================
-# 15) FEEDBACK UI (مع placeholders)
-# =========================================================
- st.divider()
- st.subheader("📝 Help us improve based on your feedback" if IS_EN else "📝 ساعدنا نطور الأداة بناءا على رأيك ")
 
-        feedback_choice = st.radio(
-            "How was your experience?" if IS_EN else "كيف كانت تجربتك مع هذه الأداة؟",
-            ("This tool was useful for me", "This tool was not useful") if IS_EN
-            else ("هذه الأداة كانت مفيدة بالنسبة لي", "هذه الأداة لم تكن مفيدة"),
-            key=f"{APP_ID}_feedback_choice"
+# =========================================================
+# FEEDBACK UI
+# =========================================================
+st.divider()
+
+st.subheader(
+    "📝 Help us improve based on your feedback"
+    if IS_EN
+    else "📝 ساعدنا نطور الأداة بناءً على رأيك"
+)
+
+feedback_choice = st.radio(
+    "How was your experience?"
+    if IS_EN
+    else "كيف كانت تجربتك مع هذه الأداة؟",
+    (
+        "This tool was useful for me",
+        "This tool was not useful",
+    )
+    if IS_EN
+    else (
+        "هذه الأداة كانت مفيدة بالنسبة لي",
+        "هذه الأداة لم تكن مفيدة",
+    ),
+    key=f"{APP_ID}_feedback_choice",
+)
+
+useful = (
+    feedback_choice
+    == (
+        "This tool was useful for me"
+        if IS_EN
+        else "هذه الأداة كانت مفيدة بالنسبة لي"
+    )
+)
+
+missing_reason = None
+if not useful:
+    missing_reason = st.text_input(
+        "What was missing? (one sentence)"
+        if IS_EN
+        else "ما الذي كان ناقصاً؟ (جملة واحدة)",
+        max_chars=200,
+        key=f"{APP_ID}_missing_reason",
+    )
+
+with st.expander(
+    "💬 Quick feedback (3 questions)"
+    if IS_EN
+    else "💬 أعطني فيدباك سريع من فضلك (3 أسئلة)",
+    expanded=False,
+):
+    problem_text = st.text_area(
+        "1) What problem were you trying to solve?"
+        if IS_EN
+        else "1) ما المشكلة التي كنت تحاول حلّها؟",
+        max_chars=280,
+        key=f"{APP_ID}_problem_text",
+    )
+
+    helpful_reason = st.text_area(
+        "2) Did it help? Why yes/no?"
+        if IS_EN
+        else "2) هل ساعدتك الأداة؟ لماذا نعم/لا؟",
+        max_chars=280,
+        key=f"{APP_ID}_helpful_reason",
+    )
+
+    must_use_text = st.text_area(
+        "3) What would make this a must-use tool for you?"
+        if IS_EN
+        else "3) ما الذي سيجعل هذه الأداة «لازم تُستخدم» بالنسبة لك؟",
+        max_chars=280,
+        key=f"{APP_ID}_must_use_text",
+    )
+
+    submit_feedback = st.button(
+        "✅ Submit feedback" if IS_EN else "✅ إرسال الفيدباك",
+        key=f"{APP_ID}_submit_feedback",
+    )
+
+    if submit_feedback:
+        has_any_text = any(
+            [
+                (missing_reason or "").strip(),
+                (problem_text or "").strip(),
+                (helpful_reason or "").strip(),
+                (must_use_text or "").strip(),
+            ]
         )
 
-        useful = (feedback_choice == ("This tool was useful for me" if IS_EN else "هذه الأداة كانت مفيدة بالنسبة لي"))
-
-        missing_reason = None
-        if not useful:
-            missing_reason = st.text_input(
-                "What was missing? (one sentence)" if IS_EN else "ما الذي كان ناقصاً؟ (جملة واحدة)",
-                max_chars=200,
-                key=f"{APP_ID}_missing_reason"
+        if (not useful) and (not has_any_text):
+            st.warning(
+                "Write at least one line 🙏"
+                if IS_EN
+                else "اكتب سطر واحد على الأقل 🙏"
             )
-
-        with st.expander("💬 Quick feedback (3 questions)" if IS_EN else "💬 أعطني فيدباك سريع من فضلك (3 أسئلة)", expanded=False):
-            problem_text = st.text_area(
-                "1) What problem were you trying to solve?" if IS_EN else "1) ما المشكلة التي كنت تحاول حلّها؟",
-                max_chars=280,
-                key=f"{APP_ID}_problem_text"
-            )
-            helpful_reason = st.text_area(
-                "2) Did it help? Why yes/no?" if IS_EN else "2) هل ساعدتك الأداة؟ لماذا نعم/لا؟",
-                max_chars=280,
-                key=f"{APP_ID}_helpful_reason"
-            )
-            must_use_text = st.text_area(
-                "3) What would make this a must-use tool for you?" if IS_EN else "3) ما الذي سيجعل هذه الأداة «لازم تُستخدم» بالنسبة لك؟",
-                max_chars=280,
-                key=f"{APP_ID}_must_use_text"
-            )
-
-            submit_feedback = st.button("✅ Submit feedback" if IS_EN else "✅ إرسال الفيدباك", key=f"{APP_ID}_submit_feedback")
-
-            if submit_feedback:
-                has_any_text = any([
-                    (missing_reason or "").strip(),
-                    (problem_text or "").strip(),
-                    (helpful_reason or "").strip(),
-                    (must_use_text or "").strip()
-                ])
-
-                if (not useful) and (not has_any_text):
-                    st.warning("Write at least one line 🙏" if IS_EN else "اكتب سطر واحد على الأقل 🙏")
-                else:
-                    try:
-                        save_feedback_via_rpc(
-                            app_name=APP_ID,
-                            useful=useful,
-                            missing_reason=(missing_reason or "").strip() or None,
-                            problem_text=(problem_text or "").strip() or None,
-                            helpful_reason=(helpful_reason or "").strip() or None,
-                            must_use_text=(must_use_text or "").strip() or None,
-                        )
-                        st.success("Feedback saved ✅ Thank you!" if IS_EN else "تم حفظ الفيدباك ✅ شكرًا لك!")
-                    except Exception as e:
-                        st.error(("Feedback error: " if IS_EN else "خطأ في حفظ الفيدباك: ") + str(e))
+        else:
+            try:
+                save_feedback_via_rpc(
+                    app_name=APP_ID,
+                    useful=useful,
+                    missing_reason=(missing_reason or "").strip() or None,
+                    problem_text=(problem_text or "").strip() or None,
+                    helpful_reason=(helpful_reason or "").strip() or None,
+                    must_use_text=(must_use_text or "").strip() or None,
+                )
+                st.success(
+                    "Feedback saved ✅ Thank you!"
+                    if IS_EN
+                    else "تم حفظ الفيدباك ✅ شكرًا لك!"
+                )
+            except Exception as e:
+                st.error(
+                    ("Feedback error: " if IS_EN else "خطأ في حفظ الفيدباك: ")
+                    + str(e)
+                )
 # =========================================================
 # 16) FOOTER (RTL always)
 # =========================================================
@@ -576,5 +638,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
