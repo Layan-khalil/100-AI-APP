@@ -172,29 +172,28 @@ def parse_gap_response(raw: str):
     if not raw:
         return "", []
 
-    # تنظيف النص من أي زخارف Markdown (النجوم والجداول)
-    clean_raw = re.sub(r"[*_`#]", "", raw)
-    
     summary = ""
     topics = []
 
-    # 1. استخراج الملخص (Summary)
-    # نبحث عن النص بعد كلمة SUMMARY أو ملخص وقبل TOPICS أو المواضيع
-    summary_match = re.search(
-        r"(?:SUMMARY|ملخص)\s*[:：]\s*(.*?)(?=(?:TOPICS|المواضيع)|$)",
-        clean_raw,
-        re.DOTALL | re.IGNORECASE
-    )
+    # 1) استخراج الملخص - نبحث عن أي نص يبدأ بـ SUMMARY أو ملخص
+    summary_match = re.search(r"(?:SUMMARY|ملخص)\s*[:：]\s*(.*?)(?=(?:TOPICS|المواضيع)|$)", raw, re.DOTALL | re.IGNORECASE)
     if summary_match:
         summary = summary_match.group(1).strip()
 
-    # 2. استخراج المواضيع (Topics)
-    # النمط الجديد يبحث عن أي سطر يحتوي على || بغض النظر عن ما قبله
-    lines = clean_raw.splitlines()
+    # 2) استخراج المواضيع - منطق "صيد" البيانات المرن
+    # سنبحث عن الأسطر التي تحتوي على فواصل (||) أو ( | ) الخاصة بجداول الماركدون
+    lines = raw.splitlines()
     for line in lines:
         line = line.strip()
+        # إذا كان السطر هو رأس الجدول أو سطر التنسيق (---) نتجاهله
+        if "---" in line and "|" in line: continue
+        
+        # تحويل جداول Markdown إلى صيغة الـ || إذا وجدت
+        if line.startswith("|") and line.endswith("|"):
+            line = " || ".join([p.strip() for p in line.split("|") if p.strip()])
+
         if "||" in line:
-            # إزالة الترقيم من بداية السطر (مثل 1. أو - أو *)
+            # تنظيف الترقيم (1. أو -)
             clean_line = re.sub(r"^(?:\d+[\.\)\-]*|[-*•])\s*", "", line).strip()
             parts = [p.strip() for p in clean_line.split("||")]
             
@@ -204,52 +203,46 @@ def parse_gap_response(raw: str):
                     "gap_reason": parts[1],
                     "format_suggestion": parts[2],
                 })
-
+    
+    # تنظيف الملخص من أي نجوم (Markdown)
+    summary = summary.replace("**", "").replace("__", "").strip()
     return summary, topics
 
 def get_or_create_gap_analysis(my_posts: str, competitor_posts: str):
-    combined_text = (
-        f"{my_posts}\n---\n{competitor_posts}\n"
-        f"LANG={st.session_state.get('ui_lang', 'AR')}"
-    )
+    combined_text = f"{my_posts}\n---\n{competitor_posts}\nLANG={st.session_state.get('ui_lang', 'AR')}"
     content_hash = get_content_hash(combined_text)
 
-    # 1) محاولة القراءة من الكاش
+    # 1) كاش
     cached_text = cache_get(APP_ID, content_hash)
     if cached_text:
         s, t = parse_gap_response(cached_text)
         if t: return s, t, True, None
 
-    # 2) استدعاء الموديل
+    # 2) استدعاء الموديل مع Force JSON-like structure
     model_name = get_working_model()
-    prompt = build_prompt(my_posts, competitor_posts)
+    original_prompt = build_prompt(my_posts, competitor_posts)
     
-    # إضافة تعليمات صارمة في اللحظة الأخيرة لضمان عدم فشل الـ Parsing
-    strict_instruction = "\n\nCRITICAL: You MUST use the '||' separator. Example: Topic Title || Reason || Format"
-    final_prompt = prompt + strict_instruction
-
-    cfg = types.GenerateContentConfig(
-        temperature=0.2, # حرارة منخفضة جداً لتقليل "هذيان" الموديل
-        top_p=0.8,
-        max_output_tokens=2000,
-    )
+    # إضافة أمر حاسم في نهاية البرومبت
+    final_prompt = original_prompt + "\n\nCRITICAL: You MUST use '||' as a separator. Do NOT use Markdown tables. Format: Title || Reason || Format"
 
     try:
+        # تقليل الحرارة لأقصى درجة لضمان الالتزام
+        cfg = types.GenerateContentConfig(temperature=0.0, max_output_tokens=2000)
         raw_text = call_model_with_retry(model_name, final_prompt, cfg, retries=3)
         
-        # 3) تحليل النتيجة
+        # 3) تحليل
         s, t = parse_gap_response(raw_text)
 
+        # إذا فشل التحليل برغم كل شيء، نقوم بمحاولة أخيرة يدوية
         if not t:
-            # محاولة أخيرة: إذا فشل الـ Parsing، نبحث عن أي أسطر مرقمة ربما نسي الموديل وضع || فيها
-            return s, [], False, "AI failed to format the response correctly. Please try again."
+            # محاولة البحث عن أي نمط منظم في النص
+            return s, [], False, "لم يتمكن الموديل من تنسيق الإجابة، يرجى المحاولة مرة أخرى."
 
-        # حفظ في الكاش فقط إذا نجح الـ Parsing
         cache_set(APP_ID, content_hash, raw_text)
         return s, t, False, None
 
     except Exception as e:
-        return "", [], False, f"Error: {str(e)}"
+        return "", [], False, str(e)
 # =========================================================
 # 8) PROMPT - PERSONAL BRANDING + FORMAT OPTIONS محددة
 # =========================================================
@@ -747,6 +740,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
