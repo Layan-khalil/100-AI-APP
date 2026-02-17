@@ -116,7 +116,7 @@ st.markdown(
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;800&display=swap');
 
-/* Hide Streamlit chrome (header/top bar/footer badges) */
+/* Hide Streamlit chrome */
 #MainMenu {{ visibility: hidden; }}
 header {{ visibility: hidden; }}
 footer {{ visibility: hidden; }}
@@ -142,10 +142,11 @@ p, div, span, li,
     direction: {DIR} !important;
     text-align: {ALIGN} !important;
     unicode-bidi: plaintext !important;
-    line-height: 1.9 !important;
+    line-height: 1.85 !important;
     word-break: break-word !important;
 }}
 
+/* Buttons */
 .stButton > button {{
     background-color: #e63946 !important;
     color: white !important;
@@ -163,25 +164,68 @@ p, div, span, li,
 
 hr {{ margin: 18px 0 !important; }}
 
-/* Result box */
+/* Result container */
 .result-box {{
     border: 2px solid rgba(230,57,70,0.45);
     border-radius: 18px;
-    padding: 16px;
+    padding: 18px;
     margin-top: 14px;
 }}
+
 .result-title {{
     font-weight: 900;
     font-size: 18px;
-    margin-bottom: 10px;
+    margin-bottom: 14px;
 }}
+
 .result-text {{
     white-space: pre-wrap;
     word-break: break-word;
-    line-height: 1.85 !important;
+    line-height: 1.9 !important;
 }}
 
-/* Footer always RTL like your tools */
+/* ===== STEPPS SCORE DESIGN ===== */
+
+.score-row {{
+    margin-bottom: 22px;
+}}
+
+.score-header {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-weight: 800;
+    font-size: 15.5px;
+}}
+
+.score-header span:first-child {{
+    flex: 1;
+}}
+
+.score-header span:last-child {{
+    min-width: 45px;
+    text-align: end;
+    opacity: 0.9;
+}}
+
+.score-bar {{
+    width: 100%;
+    height: 9px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-top: 6px;
+}}
+
+.score-fill {{
+    height: 100%;
+    background: #e63946;
+    border-radius: 12px;
+    transition: width 0.6s ease;
+}}
+
+/* Footer */
 .footer-container {{
     width: 100%;
     text-align: center;
@@ -195,12 +239,14 @@ hr {{ margin: 18px 0 !important; }}
     flex-wrap: wrap;
     direction: rtl !important;
 }}
+
 .footer-container, .footer-container * {{
     direction: rtl !important;
     text-align: center !important;
 }}
 
-/* ===== Testimonials Slider (LTR only inside) ===== */
+/* ===== Testimonials Slider ===== */
+
 .testimonial-title,
 .testimonial-wrapper,
 .testimonial-card,
@@ -208,7 +254,6 @@ hr {{ margin: 18px 0 !important; }}
 .testimonial-author {{
     direction: ltr !important;
     text-align: center !important;
-    unicode-bidi: plaintext !important;
 }}
 
 .testimonial-title {{
@@ -216,7 +261,6 @@ hr {{ margin: 18px 0 !important; }}
   font-size:20px;
   font-weight:800;
   margin: 10px 0 12px 0;
-  color: var(--text-color) !important;
 }}
 
 .testimonial-wrapper {{
@@ -225,29 +269,17 @@ hr {{ margin: 18px 0 !important; }}
   overflow-x:auto;
   padding: 8px 8px 14px 8px;
   scroll-snap-type:x mandatory;
-  -webkit-overflow-scrolling: touch;
 }}
 
-.testimonial-wrapper::-webkit-scrollbar{{height:8px;}}
-.testimonial-wrapper::-webkit-scrollbar-thumb{{
-  background: rgba(0,0,0,0.18);
-  border-radius: 99px;
-}}
-
-/* Cards background stays close to your original, but text adapts to theme */
 .testimonial-card {{
   flex: 0 0 auto;
   width: 320px;
   max-width: 86vw;
-
-  /* neutral card that looks good in light/dark */
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.14);
   border-left: 5px solid #e63946;
   border-radius: 14px;
   padding: 16px;
-  scroll-snap-align:center;
-
   min-height: 220px;
   display:flex;
   flex-direction:column;
@@ -255,16 +287,14 @@ hr {{ margin: 18px 0 !important; }}
 }}
 
 .testimonial-text {{
-  color: var(--text-color) !important; /* ✅ auto light/dark */
+  color: var(--text-color) !important;
   font-size: 14px;
   line-height: 1.6;
-  margin:0;
 }}
 
 .testimonial-author {{
   margin-top:12px;
   font-weight:700;
-  color: var(--text-color) !important; /* ✅ auto light/dark */
   opacity: 0.75;
   font-size: 13px;
 }}
@@ -376,8 +406,9 @@ def generate_stepps_analysis(text: str) -> str:
     )
 
     if IS_EN:
-        prompt = f"""
+prompt = f"""
 You are a viral content expert specialized in Jonah Berger's STEPPS framework.
+
 Analyze the following text using ONLY the six STEPPS factors:
 
 1) Social Currency
@@ -387,19 +418,47 @@ Analyze the following text using ONLY the six STEPPS factors:
 5) Practical Value
 6) Stories
 
-Rules:
-- Give a score out of 10 for each factor.
-- Provide a detailed 3–5 line explanation for EACH factor.
-- End with 3 specific improvements for this exact text.
-- Do NOT provide a final total percentage.
+IMPORTANT OUTPUT RULES (must follow exactly):
+
+- Start each section using this exact format:
+
+[Social Currency: X/10]
+Write a 3–5 line explanation here.
+
+[Triggers: X/10]
+Write a 3–5 line explanation here.
+
+[Emotion: X/10]
+Write a 3–5 line explanation here.
+
+[Public: X/10]
+Write a 3–5 line explanation here.
+
+[Practical Value: X/10]
+Write a 3–5 line explanation here.
+
+[Stories: X/10]
+Write a 3–5 line explanation here.
+
+- After finishing all six factors, add:
+
+[Improvements]
+- Provide exactly 3 specific improvements for THIS text.
+
+STRICT RULES:
+- Do not use markdown.
+- Do not use bullet symbols except under Improvements.
+- Do not change the bracket format.
+- Do not add any introduction or conclusion.
 - Language: English.
 
 Text:
 {text}
 """
     else:
-        prompt = f"""
+       prompt = f"""
 أنت خبير محتوى فيروسي متخصص في نموذج STEPPS لجونا بيرجر.
+
 حلّل النص التالي باستخدام عوامل STEPPS الستّة فقط:
 
 1) العملة الاجتماعية (Social Currency)
@@ -409,18 +468,64 @@ Text:
 5) القيمة العملية (Practical Value)
 6) القصص (Stories)
 
-قواعد:
-- أعطِ درجة من 10 لكل عامل.
-- اشرح كل عامل في 3–5 أسطر مفصّلة.
-- اختم بـ 3 تحسينات محددة لهذا النص بالذات.
-- لا تذكر نسبة إجمالية.
+مهم جداً — يجب الالتزام بالشكل التالي حرفياً:
+
+[Social Currency: X/10]
+اكتب شرحاً من 3 إلى 5 أسطر.
+
+[Triggers: X/10]
+اكتب شرحاً من 3 إلى 5 أسطر.
+
+[Emotion: X/10]
+اكتب شرحاً من 3 إلى 5 أسطر.
+
+[Public: X/10]
+اكتب شرحاً من 3 إلى 5 أسطر.
+
+[Practical Value: X/10]
+اكتب شرحاً من 3 إلى 5 أسطر.
+
+[Stories: X/10]
+اكتب شرحاً من 3 إلى 5 أسطر.
+
+بعد الانتهاء أضف:
+
+[Improvements]
+- اكتب 3 تحسينات محددة لهذا النص فقط.
+
+قواعد صارمة:
+- لا تستخدم Markdown.
+- لا تضف مقدمة أو خاتمة.
+- لا تغيّر شكل الأقواس [].
+- لا تضف أي نص خارج هذا التنسيق.
 - اللغة: العربية.
 
 النص:
 {text}
 """
     return call_model_with_retry(current_model, prompt, cfg, retries=3).strip()
+def extract_stepps_scores(analysis_text):
+    pattern = r"\[(.*?)\:\s*(\d+)\/10\]"
+    matches = re.findall(pattern, analysis_text)
 
+    scores = {}
+    for name, value in matches:
+        scores[name.strip()] = int(value)
+
+    return scores    
+def render_score(label, score):
+    percent = int(score) * 10
+    st.markdown(f"""
+    <div class="score-row">
+        <div class="score-header">
+            <span>⭐ {label}</span>
+            <span>{score}/10</span>
+        </div>
+        <div class="score-bar">
+            <div class="score-fill" style="width:{percent}%"></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 # =========================================================
 # 8) UI
 # =========================================================
@@ -570,19 +675,49 @@ if st.button(btn_label):
 
 # Result
 if st.session_state.get(f"{APP_ID}_has_result"):
+
     analysis = st.session_state.get(f"{APP_ID}_analysis", "")
-    if analysis.strip():
+
+    if analysis and analysis.strip():
+
+        # -----------------------------------
+        # 1) Fix numbering for RTL & EN
+        # -----------------------------------
+        # يمنع انقلاب الأرقام في العربي
+        analysis = re.sub(
+            r"\n\s*(\d+)[\.\)]",
+            lambda m: f"\n{m.group(1)}️⃣",
+            analysis
+        )
+
+        # -----------------------------------
+        # 2) Normalize spacing
+        # -----------------------------------
+        analysis = re.sub(r"\n{3,}", "\n\n", analysis.strip())
+
+        # -----------------------------------
+        # 3) Convert line breaks safely
+        # -----------------------------------
+        formatted_analysis = analysis.replace("\n\n", "<br><br>").replace("\n", "<br>")
+
         st.markdown("---")
+
         st.markdown(
             f"""
 <div class="result-box">
-  <div class="result-title">{("📊 Analysis Results" if IS_EN else "📊 نتائج التحليل")}</div>
-  <div class="result-text">{analysis}</div>
+
+    <div class="result-title">
+        {"📊 Analysis Results" if IS_EN else "📊 نتائج التحليل"}
+    </div>
+
+    <div class="result-text">
+        {formatted_analysis}
+    </div>
+
 </div>
 """,
             unsafe_allow_html=True,
         )
-
         # Copy
         st.markdown("### 📋 Copy" if IS_EN else "### 📋 نسخ النص")
         st.text_area(
@@ -678,5 +813,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
