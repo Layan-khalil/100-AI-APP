@@ -406,7 +406,7 @@ def generate_stepps_analysis(text: str) -> str:
     )
 
     if IS_EN:
-prompt = f"""
+       prompt = f"""
 You are a viral content expert specialized in Jonah Berger's STEPPS framework.
 
 Analyze the following text using ONLY the six STEPPS factors:
@@ -813,6 +813,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
