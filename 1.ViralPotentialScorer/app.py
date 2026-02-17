@@ -608,13 +608,7 @@ if st.session_state.get(f"{APP_ID}_has_result"):
         )
 
         # Copy
-        st.markdown("### 📋 Copy" if IS_EN else "### 📋 نسخ النص")
-        st.text_area(
-            "",
-            value=analysis,
-            height=240,
-            key=f"{APP_ID}_copy_area",
-        )
+      
 
 # =========================================================
 # 9) FEEDBACK (after result)
@@ -702,3 +696,4 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
