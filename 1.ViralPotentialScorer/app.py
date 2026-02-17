@@ -676,36 +676,47 @@ if st.button(btn_label):
 # Result
 if st.session_state.get(f"{APP_ID}_has_result"):
 
-    analysis = st.session_state.get(f"{APP_ID}_analysis", "")
+    raw_analysis = st.session_state.get(f"{APP_ID}_analysis", "")
 
-    if analysis and analysis.strip():
+    if raw_analysis and raw_analysis.strip():
 
-        # -----------------------------------
-        # 1) Fix numbering for RTL & EN
-        # -----------------------------------
-        # يمنع انقلاب الأرقام في العربي
-        analysis = re.sub(
+        # =========================
+        # CLEAN RESULT (ONE SOURCE)
+        # =========================
+
+        cleaned_analysis = raw_analysis
+
+        # remove accidental HTML
+        cleaned_analysis = re.sub(r"<[^>]+>", "", cleaned_analysis)
+
+        # fix RTL numbering
+        cleaned_analysis = re.sub(
             r"\n\s*(\d+)[\.\)]",
             lambda m: f"\n{m.group(1)}️⃣",
-            analysis
+            cleaned_analysis
         )
 
-        # -----------------------------------
-        # 2) Normalize spacing
-        # -----------------------------------
-        analysis = re.sub(r"\n{3,}", "\n\n", analysis.strip())
+        # normalize spacing
+        cleaned_analysis = re.sub(
+            r"\n{3,}", "\n\n", cleaned_analysis.strip()
+        )
 
-        # -----------------------------------
-        # 3) Convert line breaks safely
-        # -----------------------------------
-        formatted_analysis = analysis.replace("\n\n", "<br><br>").replace("\n", "<br>")
+        # version for display
+        formatted_analysis = (
+            cleaned_analysis
+            .replace("\n\n", "<br><br>")
+            .replace("\n", "<br>")
+        )
+
+        # =========================
+        # DISPLAY RESULT
+        # =========================
 
         st.markdown("---")
 
         st.markdown(
             f"""
 <div class="result-box">
-
     <div class="result-title">
         {"📊 Analysis Results" if IS_EN else "📊 نتائج التحليل"}
     </div>
@@ -713,16 +724,20 @@ if st.session_state.get(f"{APP_ID}_has_result"):
     <div class="result-text">
         {formatted_analysis}
     </div>
-
 </div>
 """,
             unsafe_allow_html=True,
         )
-        # Copy
+
+        # =========================
+        # COPY SECTION
+        # =========================
+
         st.markdown("### 📋 Copy" if IS_EN else "### 📋 نسخ النص")
+
         st.text_area(
             "",
-            value=analysis,
+            value=cleaned_analysis,
             height=240,
             key=f"{APP_ID}_copy_area",
         )
@@ -813,6 +828,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
