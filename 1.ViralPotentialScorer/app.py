@@ -55,7 +55,56 @@ genai_client = genai.Client(api_key=GOOGLE_API_KEY)
 
 APP_ID = "viral-potential-scorer-v1"
 
-MODEL_NAME = "gemini-1.5-flash"
+# =========================================================
+# 2.1) PICK A WORKING GEMINI MODEL (auto)
+# =========================================================
+MODEL_CANDIDATES = [
+    "gemini-2.5-flash-001",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash",
+]
+
+def get_working_model_name() -> str:
+    """
+    يجرّب أكثر من موديل ويختار أول موديل يشتغل على API key الحالي.
+    يخزّن النتيجة في session_state لتجنب إعادة التجربة كل مرة.
+    """
+    if "working_model" in st.session_state and st.session_state["working_model"]:
+        return st.session_state["working_model"]
+
+    test_cfg = types.GenerateContentConfig(
+        temperature=0.0,
+        max_output_tokens=8,
+    )
+
+    last_err = None
+    for m in MODEL_CANDIDATES:
+        try:
+            _ = genai_client.models.generate_content(
+                model=m,
+                contents="ping",
+                config=test_cfg,
+            )
+            st.session_state["working_model"] = m
+            return m
+        except Exception as e:
+            # جرّبي التالي لو كان NotFound / unsupported
+            s = str(e)
+            last_err = e
+            if ("404" in s) or ("NOT_FOUND" in s) or ("is not found" in s) or ("not supported" in s):
+                continue
+            # أخطاء ثانية (صلاحيات/مفتاح/شبكة) خلّينا نكمل ونشوف غيره
+            continue
+
+    # إذا ولا موديل اشتغل
+    st.session_state["working_model"] = MODEL_CANDIDATES[0]
+    raise RuntimeError(
+        "No working Gemini model found for this API key / environment. "
+        f"Last error: {last_err}"
+    )
 
 
 
@@ -319,7 +368,7 @@ def call_model_with_retry(model: str, prompt: str, cfg: types.GenerateContentCon
 # 7) Generate analysis (STEPPS)
 # =========================================================
 def generate_stepps_analysis(text: str) -> str:
-    current_model = MODEL_NAME
+    current_model = get_working_model_name()
     cfg = types.GenerateContentConfig(
         temperature=0.6,
         top_p=0.9,
@@ -629,4 +678,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
