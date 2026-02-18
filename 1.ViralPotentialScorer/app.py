@@ -516,19 +516,17 @@ TESTIMONIALS_HTML = r"""
 
   <div class="testimonial-card">
     <div class="testimonial-text">
-      The app works far better now! The plain text download is an excellent addition.
-    </div>
-    <div class="testimonial-author">— User feedback</div>
-  </div>
-
-  <div class="testimonial-card">
-    <div class="testimonial-text">
       Great tool. It helped me create a post that attracts advice and real experiences from others.
       I recommend creators and anyone interested in content to try it.
     </div>
     <div class="testimonial-author">— Salem Khalil</div>
   </div>
-
+  <div class="testimonial-card">
+    <div class="testimonial-text">
+      Good luck & wishing you the best
+    </div>
+    <div class="testimonial-author">— Yousef Khalil</div>
+  </div>
   <div class="testimonial-card">
     <div class="testimonial-text">
       The tool helped me understand what actually helps a post reach more people,
@@ -696,4 +694,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
