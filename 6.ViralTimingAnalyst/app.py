@@ -310,17 +310,32 @@ def clean_json_text(text: str) -> str:
     return match.group(0) if match else text.strip()
 
 def analyze_timing(topic: str, audience: str, content_type: str, is_en: bool) -> dict:
+
     lang_name = "English" if is_en else "Arabic"
 
-    # ✅ مهم: بنتجنب google_search tool تماماً، وبنخليها "Analyst" بالمعرفة العامة + heuristics
+    # =====================================================
+    # ✅ 1) Reduce token usage (VERY IMPORTANT)
+    # limit topic length before sending to model
+    # =====================================================
+    short_topic = (topic or "").strip()[:1200]
+    short_audience = (audience or "").strip()[:200]
+
+    # =====================================================
+    # ✅ 2) System instruction (lighter + stable)
+    # =====================================================
     system_prompt = (
         "You are a Viral Timing Analyst. "
-        "You do not browse the web. You infer from platform norms and audience behavior patterns. "
+        "You do not browse the web. "
+        "You infer timing from platform behavior patterns and audience habits. "
         "Return ONLY a valid JSON object."
     )
 
+    # =====================================================
+    # ✅ 3) Prompt (short + deterministic)
+    # =====================================================
     prompt = f"""
-Generate best posting time recommendations based on the user's topic and audience.
+Generate best posting time recommendations.
+
 Return ONLY JSON in {lang_name} with EXACT keys:
 
 {{
@@ -334,23 +349,24 @@ Return ONLY JSON in {lang_name} with EXACT keys:
 }}
 
 Inputs:
-- Topic: {topic}
-- Audience: {audience}
+- Topic: {short_topic}
+- Audience: {short_audience}
 - ContentType: {content_type}
 
 Rules:
-- Time must be in UTC (GMT+0) explicitly.
-- Give a practical time window like "17:00–19:00 UTC".
-- Keep it realistic and helpful.
+- Time must be in UTC (GMT+0).
+- Use a realistic posting window like "17:00–19:00 UTC".
+- Keep explanations concise and practical.
 """
 
     cfg = g_types.GenerateContentConfig(
         system_instruction=system_prompt,
-        temperature=0.4,
-        max_output_tokens=1400,
+        temperature=0.35,      # ✅ lower randomness = fewer retries
+        max_output_tokens=600  # ✅ smaller output = cheaper + faster
     )
 
     last_err = None
+
     for attempt in range(MAX_RETRIES):
         try:
             resp = genai_client.models.generate_content(
@@ -358,20 +374,32 @@ Rules:
                 contents=prompt,
                 config=cfg,
             )
-            raw = clean_json_text(getattr(resp, "text", "") or "")
+
+            raw_text = getattr(resp, "text", "") or ""
+            raw = clean_json_text(raw_text)
+
+            if not raw:
+                return {"error": "Empty model response"}
+
             return json.loads(raw)
+
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
             last_err = e
             time.sleep(INITIAL_DELAY * (attempt + 1))
+
+        except json.JSONDecodeError:
+            # retry once with shorter text automatically
+            short_topic = short_topic[:600]
+
         except Exception as e:
             last_err = e
             break
 
     return {
-        "error": str(last_err) if last_err else ("Model error" if is_en else "خطأ في الموديل")
+        "error": str(last_err) if last_err else (
+            "Model error" if is_en else "خطأ في الموديل"
+        )
     }
-
-
 # =========================================================
 # 8) UI
 # =========================================================
@@ -616,6 +644,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
