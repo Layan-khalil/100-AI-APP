@@ -351,7 +351,7 @@ INITIAL_DELAY = 4
 def adapt_tone(original_post: str):
     if not genai_client:
         return {"error": "Gemini client is not initialized."}
-
+    original_post = original_post[:900]
     lang_name = "English" if IS_EN else "Arabic"
 
     system_prompt = (
@@ -404,7 +404,7 @@ Important:
                     response_mime_type="application/json",
                     response_schema=response_schema,
                     temperature=0.5,
-                    max_output_tokens=2400,
+                    max_output_tokens=1400,
                 ),
             )
             raw_text = resp.text or ""
@@ -456,7 +456,7 @@ if st.button(TXT["btn"]):
 
     track_cta_event(APP_ID)
 
-    if not can_call_model(min_seconds=10):
+    if not can_call_model(min_seconds=15):
         st.warning(TXT["wait"])
         st.stop()
 
@@ -474,7 +474,7 @@ if st.button(TXT["btn"]):
     if not isinstance(result, dict) or "error" in result:
         msg = (result.get("error") if isinstance(result, dict) else "Unknown error")
         if any(x in str(msg) for x in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE"]):
-            st.warning("⚡ The tool is currently busy. Please try again in a few seconds." if IS_EN else "⚡ الأداة مشغولة حالياً، جرّبي بعد ثواني.")
+            st.warning("⚡ The tool is currently busy. Please try again in a few seconds." if IS_EN else "⚡ الأداة مشغولة حالياً، جرّب بعد ثواني.")
         else:
             st.error(msg)
     else:
@@ -585,4 +585,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
