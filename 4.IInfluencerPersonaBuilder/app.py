@@ -454,6 +454,11 @@ st.markdown("---")
 st.markdown(
     """
 <style>
+/* =========================
+   Testimonials (Fix Light/Dark)
+   ========================= */
+
+/* Title */
 .testimonial-title{
   text-align:center;
   font-size:20px;
@@ -461,7 +466,10 @@ st.markdown(
   margin: 10px 0 12px 0;
   direction:ltr !important;
   unicode-bidi: plaintext !important;
+  color: #111827;            /* ✅ واضح بالوضع الفاتح */
 }
+
+/* Wrapper */
 .testimonial-wrapper{
   display:flex;
   gap:14px;
@@ -472,15 +480,18 @@ st.markdown(
 }
 .testimonial-wrapper::-webkit-scrollbar{height:8px;}
 .testimonial-wrapper::-webkit-scrollbar-thumb{
-  background: rgba(255,255,255,0.18);
+  background: rgba(0,0,0,0.18);  /* ✅ مناسب للفاتيح */
   border-radius: 99px;
 }
+
+/* Card */
 .testimonial-card{
   flex: 0 0 auto;
   width: 320px;
   max-width: 85vw;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.14);
+
+  background: #ffffff;              /* ✅ ثابت وواضح بالوضع الفاتح */
+  border: 1px solid rgba(0,0,0,0.08);
   border-left: 5px solid #e63946;
   border-radius: 14px;
   padding: 16px 16px 14px 16px;
@@ -492,9 +503,13 @@ st.markdown(
 
   height:auto !important;
   min-height: unset !important;
+
+  box-shadow: 0 6px 18px rgba(0,0,0,0.06); /* ✅ شكل احترافي */
 }
+
+/* Text */
 .testimonial-text{
-  color: rgba(255,255,255,0.92);
+  color: #111827 !important;     /* ✅ نص غامق واضح */
   font-size: 14px;
   line-height: 1.6;
   margin:0 !important;
@@ -503,16 +518,47 @@ st.markdown(
   direction:ltr !important;
   text-align:center !important;
   unicode-bidi: plaintext !important;
+
+  opacity: 1 !important;         /* ✅ يمنع أي بهتان */
 }
+
+/* Author */
 .testimonial-author{
   margin-top:10px;
   font-weight:700;
-  color: rgba(255,255,255,0.72);
+  color: #6b7280 !important;     /* ✅ رمادي واضح */
   font-size: 13px;
 
   direction:ltr !important;
   text-align:center !important;
   unicode-bidi: plaintext !important;
+
+  opacity: 1 !important;
+}
+
+/* ✅ Dark Mode override */
+@media (prefers-color-scheme: dark){
+  .testimonial-title{
+    color: rgba(255,255,255,0.92) !important;
+  }
+
+  .testimonial-wrapper::-webkit-scrollbar-thumb{
+    background: rgba(255,255,255,0.22);
+  }
+
+  .testimonial-card{
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+
+  .testimonial-text{
+    color: rgba(255,255,255,0.92) !important;
+  }
+
+  .testimonial-author{
+    color: rgba(255,255,255,0.72) !important;
+  }
 }
 </style>
 
@@ -729,3 +775,4 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
