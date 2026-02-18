@@ -566,7 +566,7 @@ st.markdown(
 
 <div class="testimonial-wrapper">
   <div class="testimonial-card">
-    <div class="testimonial-text">A solid AI tool — simple, practical, and worth trying.</div>
+    <div class="testimonial-text">A solid AI tool simple, practical, and worth trying.</div>
     <div class="testimonial-author">— Abdul Razzaq</div>
   </div>
 
@@ -584,7 +584,7 @@ st.markdown(
 
   <div class="testimonial-card">
     <div class="testimonial-text">
-      Useful and simplifies my strategy. Exporting the advice as one plain text would make it easier — especially if it becomes available as an app.
+      Useful and simplifies my strategy. Exporting the advice as one plain text would make it easier ,,especially if it becomes available as an app!.
     </div>
     <div class="testimonial-author">— Rashid Dossett</div>
   </div>
@@ -775,4 +775,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
