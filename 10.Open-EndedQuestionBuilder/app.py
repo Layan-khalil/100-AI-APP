@@ -23,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_ID = "8-open-question-builder"
+APP_ID = "10-open-question-builder"
 
 MODEL_CANDIDATES = [
     "gemini-2.0-flash-001",
@@ -547,3 +547,4 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
