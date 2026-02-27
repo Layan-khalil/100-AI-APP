@@ -2,7 +2,6 @@ import streamlit as st
 import os
 import json
 import time
-import re
 import hashlib
 from datetime import datetime, timezone
 
@@ -34,15 +33,9 @@ MODEL_CANDIDATES = [
 MAX_RETRIES = 4
 INITIAL_DELAY = 3
 
-# =========================================================
-# LIMITS
-# =========================================================
-FREE_SESSION_USES = 5       # قبل طلب الإيميل (per session)
-BETA_EMAIL_USES = 10        # بعد إدخال الإيميل (stored in Supabase)
-
-# NEW: Return 3 questions
+# Return 3 questions
 NUM_QUESTIONS = 3
-CACHE_VERSION_TAG = "v2_3q"   # to avoid mixing old cache results
+CACHE_VERSION_TAG = "v2_3q_free"  # new tag to separate from older cache shapes
 
 
 # =========================================================
@@ -98,21 +91,6 @@ TXT = {
     "fb_ok": "Feedback saved ✅" if IS_EN else "تم حفظ الفيدباك ✅",
     "wait": "Please wait a few seconds before trying again." if IS_EN else "استني شوي قبل المحاولة مرة ثانية.",
     "err_missing_secrets": "⚠️ Missing secrets in Secrets/Env." if IS_EN else "⚠️ مفاتيح الربط ناقصة في Secrets/Env.",
-
-    # Gate text
-    "free_left": ("Free uses left: " if IS_EN else "المحاولات المجانية المتبقية: "),
-    "beta_left": ("Beta uses left: " if IS_EN else "محاولات البيتا المتبقية: "),
-    "gate_title": ("🔒 Unlock Beta Access" if IS_EN else "🔒 افتحي وصول البيتا"),
-    "gate_body": (
-        f"You’ve used your {FREE_SESSION_USES} free generations. Enter your email to get {BETA_EMAIL_USES} beta credits."
-        if IS_EN else
-        f"خلصتي {FREE_SESSION_USES} محاولات مجانية. اكتبي إيميلك لتحصلي على {BETA_EMAIL_USES} محاولات بيتا."
-    ),
-    "email_label": ("Email" if IS_EN else "الإيميل"),
-    "email_btn": ("Unlock" if IS_EN else "تفعيل"),
-    "email_bad": ("Please enter a valid email." if IS_EN else "رجاءً اكتبي إيميل صحيح."),
-    "beta_ok": (f"Beta unlocked ✅ You now have {BETA_EMAIL_USES} credits." if IS_EN else f"تم تفعيل البيتا ✅ صار عندك {BETA_EMAIL_USES} محاولات."),
-    "beta_empty": ("You’ve used all beta credits." if IS_EN else "خلصت محاولات البيتا."),
 }
 
 
@@ -234,169 +212,10 @@ textarea, input {{
     direction: rtl !important;
     text-align: center !important;
 }}
-/* ====== Shadows + Colors per type ====== */
-.bold-box {{
-  background: rgba(239, 68, 68, 0.12);
-  border-right: 6px solid #ef4444;
-  box-shadow: 0 10px 26px rgba(239, 68, 68, 0.18);
-}}
-
-.curious-box {{
-  background: rgba(59, 130, 246, 0.12);
-  border-right: 6px solid #3b82f6;
-  box-shadow: 0 10px 26px rgba(59, 130, 246, 0.18);
-}}
-
-.deep-box {{
-  background: rgba(139, 92, 246, 0.12);
-  border-right: 6px solid #8b5cf6;
-  box-shadow: 0 10px 26px rgba(139, 92, 246, 0.18);
-}}
-
-/* ====== Icon animation ====== */
-.icon-anim {{
-  display: inline-block;
-  margin-left: 8px; /* RTL friendly */
-  animation: floaty 2.2s ease-in-out infinite;
-}}
-
-@keyframes floaty {{
-  0% {{ transform: translateY(0); opacity: 0.85; }}
-  50% {{ transform: translateY(-4px); opacity: 1; }}
-  100% {{ transform: translateY(0); opacity: 0.85; }}
-}}
-
-/* ====== Copy button ====== */
-.copy-btn {{
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(17,24,39,0.35);
-  color: #fff;
-  padding: 8px 12px;
-  border-radius: 10px;
-  cursor: pointer;
-  font-weight: 800;
-  font-size: 0.95em;
-  transition: transform 0.12s ease, filter 0.12s ease;
-}}
-
-.copy-btn:hover {{
-  filter: brightness(1.05);
-  transform: scale(1.02);
-}}
-
-.copy-row {{
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  margin-top: 10px;
-  flex-wrap: wrap;
-}}
 </style>
 """,
     unsafe_allow_html=True,
 )
-
-
-# =========================================================
-# SESSION STATE + EMAIL HELPERS
-# =========================================================
-if "free_uses_openq" not in st.session_state:
-    st.session_state["free_uses_openq"] = 0
-
-if "beta_email_openq" not in st.session_state:
-    st.session_state["beta_email_openq"] = None
-
-if "beta_remaining_openq" not in st.session_state:
-    st.session_state["beta_remaining_openq"] = None
-
-EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
-
-
-def redeem_beta(email: str) -> int:
-    """Create/refresh beta user in Supabase and return remaining uses."""
-    res = supabase.rpc("redeem_beta_email", {"p_email": email}).execute()
-    data = getattr(res, "data", None) or []
-    if data and isinstance(data, list) and "remaining_uses" in data[0]:
-        return int(data[0]["remaining_uses"])
-    return BETA_EMAIL_USES
-
-
-def consume_beta(email: str) -> int:
-    """Decrement one beta credit in Supabase and return updated remaining uses."""
-    res = supabase.rpc("consume_beta_use", {"p_email": email}).execute()
-    data = getattr(res, "data", None) or []
-    if data and isinstance(data, list) and "remaining_uses" in data[0]:
-        return int(data[0]["remaining_uses"])
-    return 0
-
-
-def show_gate_ui():
-    st.subheader(TXT["gate_title"])
-    st.info(TXT["gate_body"])
-    email = st.text_input(TXT["email_label"], key="beta_email_input_openq")
-    if st.button(TXT["email_btn"], key="beta_email_btn_openq"):
-        email_clean = (email or "").strip().lower()
-        if not EMAIL_RE.match(email_clean):
-            st.warning(TXT["email_bad"])
-            st.stop()
-        try:
-            remaining = redeem_beta(email_clean)
-            st.session_state["beta_email_openq"] = email_clean
-            st.session_state["beta_remaining_openq"] = remaining
-            st.success(TXT["beta_ok"])
-            st.rerun()
-        except Exception as e:
-            st.error(str(e))
-            st.stop()
-
-
-def has_access_to_generate() -> bool:
-    """Return True if user can generate now; otherwise show gate and return False."""
-    email = st.session_state.get("beta_email_openq")
-    beta_remaining = st.session_state.get("beta_remaining_openq")
-
-    # Beta path
-    if email:
-        if beta_remaining is None:
-            try:
-                beta_remaining = redeem_beta(email)
-                st.session_state["beta_remaining_openq"] = beta_remaining
-            except Exception:
-                beta_remaining = 0
-                st.session_state["beta_remaining_openq"] = 0
-
-        if int(beta_remaining) <= 0:
-            st.warning(TXT["beta_empty"])
-            return False
-
-        return True
-
-    # Free session path
-    used = int(st.session_state.get("free_uses_openq", 0))
-    if used >= FREE_SESSION_USES:
-        show_gate_ui()
-        return False
-
-    return True
-
-
-def increment_free_use():
-    st.session_state["free_uses_openq"] = int(st.session_state.get("free_uses_openq", 0)) + 1
-
-
-def decrement_beta_use_if_any():
-    email = st.session_state.get("beta_email_openq")
-    if not email:
-        return
-    try:
-        remaining = consume_beta(email)
-        st.session_state["beta_remaining_openq"] = remaining
-    except Exception:
-        pass
 
 
 # =========================================================
@@ -431,7 +250,6 @@ def track_cta_event(app_id: str):
 
 
 def make_hash(topic: str, goal: str, audience: str, lang: str) -> str:
-    # include cache version so old cached "single-question" won't show here
     payload = f"{CACHE_VERSION_TAG}||{topic.strip()}||{goal.strip()}||{(audience or '').strip()}||{lang}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -521,57 +339,46 @@ def _extract_json_block(t: str) -> str:
 
 
 def _normalize_questions(obj: dict, is_en: bool) -> dict:
-    """Ensure output is always: {'Questions':[q1,q2,q3], 'EffectivenessAnalysis': '...'}"""
+    """Ensure output is always: {'Questions':[{'Style','Question'}x3], 'EffectivenessAnalysis': '...'}"""
     if not isinstance(obj, dict):
         return {"error": "Bad response" if is_en else "استجابة غير صالحة"}
-
-    # Backward compatibility (if old shape appears)
-    if "GeneratedQuestion" in obj and "Questions" not in obj:
-        q = (obj.get("GeneratedQuestion") or "").strip()
-        obj = {
-            "Questions": [q] if q else [],
-            "EffectivenessAnalysis": obj.get("EffectivenessAnalysis", "") or ""
-        }
 
     qs = obj.get("Questions")
     if not isinstance(qs, list):
         qs = []
 
-    # clean + keep non-empty
     cleaned = []
-    for x in qs:
-        if isinstance(x, str):
-            t = x.strip()
-            if t:
-                cleaned.append(t)
+    for item in qs:
+        if isinstance(item, dict):
+            style = (item.get("Style") or "").strip()
+            question = (item.get("Question") or "").strip()
+            if question:
+                cleaned.append({"Style": style, "Question": question})
 
-    # pad to NUM_QUESTIONS
     while len(cleaned) < NUM_QUESTIONS:
-        cleaned.append("—")
-
+        cleaned.append({"Style": "—", "Question": "—"})
     cleaned = cleaned[:NUM_QUESTIONS]
-    obj["Questions"] = cleaned
 
+    obj["Questions"] = cleaned
     if "EffectivenessAnalysis" not in obj or not isinstance(obj.get("EffectivenessAnalysis"), str):
         obj["EffectivenessAnalysis"] = ""
 
     return obj
 
-def generate_open_questions(topic: str, goal: str, audience: str, is_en: bool) -> dict:
-    lang_name = "English" if is_en else "Arabic"
 
+def generate_open_questions(topic: str, goal: str, audience: str, is_en: bool) -> dict:
     system_prompt = (
-    "You are a high-level Conversation Strategist for social media growth. "
-    "Generate EXACTLY 3 open-ended questions with distinct styles:\n"
-    "1) Bold / Provocative\n"
-    "2) Curious / Exploratory\n"
-    "3) Deep / Strategic\n\n"
-    "Each question must avoid Yes/No answers.\n"
-    "If the UI language is Arabic, you MUST write everything in Arabic only. "
-    "If the UI language is English, you MUST write everything in English only. "
-    "Do not mix languages. "
-    "Return ONLY valid JSON."
-)
+        "You are a high-level Conversation Strategist for social media growth. "
+        "Generate EXACTLY 3 open-ended questions with distinct styles:\n"
+        "1) Bold / Provocative\n"
+        "2) Curious / Exploratory\n"
+        "3) Deep / Strategic\n\n"
+        "Each question must avoid Yes/No answers.\n"
+        "If the UI language is Arabic, you MUST write everything in Arabic only. "
+        "If the UI language is English, you MUST write everything in English only. "
+        "Do not mix languages. "
+        "Return ONLY valid JSON."
+    )
 
     prompt = f"""
 Generate EXACTLY 3 open-ended questions + a short analysis explaining why they work.
@@ -641,32 +448,9 @@ Return ONLY JSON with EXACT keys:
                 return {"error": "Empty response" if is_en else "استجابة فارغة"}
 
             obj = json.loads(raw)
-
-            # Normalize structure
-            questions = obj.get("Questions", [])
-            cleaned = []
-
-            for q in questions:
-                if isinstance(q, dict):
-                    style = q.get("Style", "").strip()
-                    question_text = q.get("Question", "").strip()
-                    if question_text:
-                        cleaned.append({
-                            "Style": style,
-                            "Question": question_text
-                        })
-
-            while len(cleaned) < 3:
-                cleaned.append({
-                    "Style": "—",
-                    "Question": "—"
-                })
-
-            obj["Questions"] = cleaned[:3]
-
-            if "EffectivenessAnalysis" not in obj:
-                obj["EffectivenessAnalysis"] = ""
-
+            obj = _normalize_questions(obj, is_en)
+            if "error" in obj:
+                return obj
             return obj
 
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
@@ -678,28 +462,25 @@ Return ONLY JSON with EXACT keys:
 
     return {"error": str(last_err) if last_err else ("Model error" if is_en else "خطأ في الموديل")}
 
+
+def escape_html(s: str) -> str:
+    if s is None:
+        return ""
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#039;")
+    )
+
+
 # =========================================================
 # 8) UI
 # =========================================================
 st.title(TXT["title"])
 st.caption(TXT["sub"])
-
-# Show counters (top)
-email = st.session_state.get("beta_email_openq")
-if email:
-    remaining = st.session_state.get("beta_remaining_openq")
-    if remaining is None:
-        try:
-            remaining = redeem_beta(email)
-            st.session_state["beta_remaining_openq"] = remaining
-        except Exception:
-            remaining = 0
-            st.session_state["beta_remaining_openq"] = 0
-    st.caption(f"{TXT['beta_left']}{int(remaining)}")
-else:
-    used = int(st.session_state.get("free_uses_openq", 0))
-    left = max(0, FREE_SESSION_USES - used)
-    st.caption(f"{TXT['free_left']}{left}")
 
 with st.expander(TXT["exp_title"], expanded=True):
     st.markdown(TXT["exp_body"])
@@ -733,13 +514,9 @@ if f"{APP_ID}_result" not in st.session_state:
 
 
 # =========================================================
-# Generate button handler (with access gate)
+# Generate button handler (FREE - NO LIMITS)
 # =========================================================
 if st.button(TXT["btn"]):
-    # 0) Access gate first
-    if not has_access_to_generate():
-        st.stop()
-
     t = (topic or "").strip()
     g = (goal or "").strip()
     a = (audience or "").strip()
@@ -751,8 +528,8 @@ if st.button(TXT["btn"]):
     # CTA count
     track_cta_event(APP_ID)
 
-    # rate limit (client-side)
-    if not can_call_model(min_seconds=8):
+    # rate limit (client-side) - keep to reduce accidental spam clicks
+    if not can_call_model(min_seconds=6):
         st.warning(TXT["wait"])
         st.stop()
 
@@ -760,13 +537,11 @@ if st.button(TXT["btn"]):
     c_hash = make_hash(t, g, a, st.session_state["ui_lang"])
     cached = cache_get(APP_ID, c_hash)
 
-    success = False
     if cached and isinstance(cached, dict) and "Questions" in cached:
         cached = _normalize_questions(cached, IS_EN)
         if "error" not in cached:
             st.session_state[f"{APP_ID}_result"] = cached
             st.session_state[f"{APP_ID}_has_result"] = True
-            success = True
     else:
         with st.spinner(TXT["spinner"]):
             res = generate_open_questions(t, g, a, IS_EN)
@@ -775,59 +550,32 @@ if st.button(TXT["btn"]):
             cache_set(APP_ID, c_hash, res)
             st.session_state[f"{APP_ID}_result"] = res
             st.session_state[f"{APP_ID}_has_result"] = True
-            success = True
         else:
             st.error(res.get("error", "Unknown error"))
 
-    # 1) Consume credit ONLY on success
-    if success:
-        if st.session_state.get("beta_email_openq"):
-            decrement_beta_use_if_any()
-        else:
-            increment_free_use()
 
-def escape_html(s: str) -> str:
-    if s is None:
-        return ""
-    return (
-        str(s)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#039;")
-    )
 # =========================================================
 # 9) RESULTS + FEEDBACK
 # =========================================================
-# =========================================================
-# 9) RESULTS + FEEDBACK
-# =========================================================
-
 data = st.session_state.get(f"{APP_ID}_result") if st.session_state.get(f"{APP_ID}_has_result") else None
 
 if isinstance(data, dict) and data and "Questions" in data:
-
     qs = data.get("Questions") or []
 
     st.markdown("---")
     st.markdown(f"### {TXT['result_title']}")
 
     for i, item in enumerate(qs, start=1):
-
-        # دعم الحالتين (dict أو string)
         if isinstance(item, dict):
-            style = item.get("Style", "")
-            question = item.get("Question", "")
+            style = (item.get("Style") or "").strip()
+            question = (item.get("Question") or "").strip()
         else:
             style = ""
-            question = str(item)
+            question = str(item).strip()
 
-        # فلترة أي HTML أو خروج غير منطقي
-        if not question or "<" in question or len(question.strip()) < 5:
+        if not question or "<" in question or len(question) < 5:
             continue
 
-        # Labels حسب اللغة
         if IS_EN:
             label_map = {
                 "Bold": "🔥 Bold Question",
@@ -841,28 +589,20 @@ if isinstance(data, dict) and data and "Questions" in data:
                 "Deep": "🧠 سؤال استراتيجي عميق",
             }
 
-        label = label_map.get(
-            style,
-            f"الخيار {i}" if not IS_EN else f"Option {i}"
-        )
+        label = label_map.get(style, f"Option {i}" if IS_EN else f"الخيار {i}")
 
-        # عرض السؤال
         st.markdown(f"**{label}**")
         st.markdown(
             f"<div class='result-block'>{escape_html(question)}</div>",
             unsafe_allow_html=True
         )
 
-        # زر نسخ
-        copy_label = "نسخ السؤال" if not IS_EN else "Copy question"
-        copied_msg = "تم النسخ ✅" if not IS_EN else "Copied ✅"
-
+        copy_label = "Copy question" if IS_EN else "نسخ السؤال"
+        copied_msg = "Copied ✅" if IS_EN else "تم النسخ ✅"
         if st.button(copy_label, key=f"copy_{APP_ID}_{i}"):
             st.toast(copied_msg)
 
-    # ===== التحليل (مرة واحدة فقط) =====
-    analysis_text = data.get("EffectivenessAnalysis", "").strip()
-
+    analysis_text = (data.get("EffectivenessAnalysis") or "").strip()
     if analysis_text:
         st.markdown("---")
         st.markdown(f"### {TXT['analysis_title']}")
@@ -870,6 +610,7 @@ if isinstance(data, dict) and data and "Questions" in data:
             f"<div class='result-block'>{escape_html(analysis_text)}</div>",
             unsafe_allow_html=True
         )
+
     # Feedback
     st.divider()
     st.subheader(TXT["fb_title"])
