@@ -5,7 +5,8 @@ import time
 import re
 import hashlib
 from datetime import datetime, timezone
-
+import uuid
+from streamlit_cookies_manager import EncryptedCookieManager
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
 
@@ -22,6 +23,18 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+# ======================
+# Device ID via Cookies
+# ======================
+cookies = EncryptedCookieManager(prefix="openq_", password=os.environ.get("COOKIE_PASSWORD", "change-me-strong"))
+if not cookies.ready():
+    st.stop()
+
+if "device_id" not in cookies:
+    cookies["device_id"] = str(uuid.uuid4())
+    cookies.save()
+
+DEVICE_ID = cookies["device_id"]  # string uuid
 
 APP_ID = "10-open-question-builder"
 
@@ -37,8 +50,8 @@ INITIAL_DELAY = 3
 # =========================================================
 # LIMITS
 # =========================================================
-FREE_SESSION_USES = 5       # قبل طلب الإيميل (per session)
-BETA_EMAIL_USES = 10        # بعد إدخال الإيميل (stored in Supabase)
+FREE_SESSION_USES = 3      # قبل طلب الإيميل (per session)
+BETA_EMAIL_USES = 7      # بعد إدخال الإيميل (stored in Supabase)
 
 # NEW: Return 3 questions
 NUM_QUESTIONS = 3
@@ -312,28 +325,68 @@ if "beta_email_openq" not in st.session_state:
 
 if "beta_remaining_openq" not in st.session_state:
     st.session_state["beta_remaining_openq"] = None
+if "beta_email_openq" not in st.session_state:
+    st.session_state["beta_email_openq"] = None
 
+if "beta_remaining_openq" not in st.session_state:
+    st.session_state["beta_remaining_openq"] = None
+
+if "hit_limit_openq" not in st.session_state:
+    st.session_state["hit_limit_openq"] = False
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
-def redeem_beta(email: str) -> int:
-    """Create/refresh beta user in Supabase and return remaining uses."""
-    res = supabase.rpc("redeem_beta_email", {"p_email": email}).execute()
+def redeem_beta(email: str, device_id: str) -> tuple[int, bool]:
+    """
+    Create/refresh beta user in Supabase and return:
+    (remaining_uses, hit_limit)
+    """
+    res = supabase.rpc(
+        "redeem_beta_email",
+        {
+            "p_email": email,
+            "p_device_id": device_id,
+            "p_beta_uses": BETA_EMAIL_USES,
+        },
+    ).execute()
+
     data = getattr(res, "data", None) or []
-    if data and isinstance(data, list) and "remaining_uses" in data[0]:
-        return int(data[0]["remaining_uses"])
-    return BETA_EMAIL_USES
+
+    if data and isinstance(data, list):
+        remaining = int(data[0].get("remaining_uses", 0))
+        hit = bool(data[0].get("hit_limit", False))
+        return remaining, hit
+
+    return BETA_EMAIL_USES, False
 
 
-def consume_beta(email: str) -> int:
-    """Decrement one beta credit in Supabase and return updated remaining uses."""
-    res = supabase.rpc("consume_beta_use", {"p_email": email}).execute()
+def consume_beta(email: str) -> tuple[int, bool]:
+    """
+    Decrement one beta credit and return:
+    (remaining_uses, hit_limit)
+    """
+    res = supabase.rpc(
+        "consume_beta_use",
+        {"p_email": email},
+    ).execute()
+
     data = getattr(res, "data", None) or []
-    if data and isinstance(data, list) and "remaining_uses" in data[0]:
-        return int(data[0]["remaining_uses"])
-    return 0
 
+    if data and isinstance(data, list):
+        remaining = int(data[0].get("remaining_uses", 0))
+        hit = bool(data[0].get("hit_limit", False))
+        return remaining, hit
 
+    return 0, True
+
+def ensure_device(device_id: str):
+    supabase.rpc("ensure_device", {"p_device_id": device_id}).execute()
+def consume_free(device_id: str) -> tuple[bool, int]:
+    res = supabase.rpc("consume_free_use", {"p_device_id": device_id, "p_free_limit": FREE_DEVICE_USES}).execute()
+    row = (getattr(res, "data", None) or [])[0]
+    return bool(row["allowed"]), int(row["free_left"])
+def join_waitlist(email: str | None, device_id: str):
+    supabase.rpc("join_openq_waitlist", {"p_email": email or "", "p_device_id": device_id}).execute()    
 def show_gate_ui():
     st.subheader(TXT["gate_title"])
     st.info(TXT["gate_body"])
@@ -344,9 +397,10 @@ def show_gate_ui():
             st.warning(TXT["email_bad"])
             st.stop()
         try:
-            remaining = redeem_beta(email_clean)
+            remaining, hit_limit = redeem_beta(email_clean)
             st.session_state["beta_email_openq"] = email_clean
             st.session_state["beta_remaining_openq"] = remaining
+            st.session_state["hit_limit_openq"] = hit_limit
             st.success(TXT["beta_ok"])
             st.rerun()
         except Exception as e:
@@ -363,8 +417,8 @@ def has_access_to_generate() -> bool:
     if email:
         if beta_remaining is None:
             try:
-                beta_remaining = redeem_beta(email)
-                st.session_state["beta_remaining_openq"] = beta_remaining
+                beta_remaining, hit_limit = redeem_beta(email)
+                st.session_state["hit_limit_openq"] = hit_limit
             except Exception:
                 beta_remaining = 0
                 st.session_state["beta_remaining_openq"] = 0
@@ -393,8 +447,9 @@ def decrement_beta_use_if_any():
     if not email:
         return
     try:
-        remaining = consume_beta(email)
+        remaining, hit = consume_beta(email)
         st.session_state["beta_remaining_openq"] = remaining
+        st.session_state["hit_limit_openq"] = hit
     except Exception:
         pass
 
@@ -690,8 +745,8 @@ if email:
     remaining = st.session_state.get("beta_remaining_openq")
     if remaining is None:
         try:
-            remaining = redeem_beta(email)
-            st.session_state["beta_remaining_openq"] = remaining
+            remaining, hit_limit = redeem_beta(email)
+            st.session_state["hit_limit_openq"] = hit_limit
         except Exception:
             remaining = 0
             st.session_state["beta_remaining_openq"] = 0
@@ -939,6 +994,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
