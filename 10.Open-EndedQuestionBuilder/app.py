@@ -740,22 +740,52 @@ st.title(TXT["title"])
 st.caption(TXT["sub"])
 
 # Show counters (top)
+# =========================================================
+# Usage Status (Device + Beta)
+# =========================================================
+
+ensure_device(DEVICE_ID)
+
 email = st.session_state.get("beta_email_openq")
+
+# =========================
+# 1️⃣ Beta Mode
+# =========================
 if email:
+
     remaining = st.session_state.get("beta_remaining_openq")
+
     if remaining is None:
         try:
-            remaining, hit_limit = redeem_beta(email)
+            remaining, hit_limit = redeem_beta(email, DEVICE_ID)
+            st.session_state["beta_remaining_openq"] = remaining
             st.session_state["hit_limit_openq"] = hit_limit
         except Exception:
             remaining = 0
             st.session_state["beta_remaining_openq"] = 0
-    st.caption(f"{TXT['beta_left']}{int(remaining)}")
-else:
-    used = int(st.session_state.get("free_uses_openq", 0))
-    left = max(0, FREE_SESSION_USES - used)
-    st.caption(f"{TXT['free_left']}{left}")
+            st.session_state["hit_limit_openq"] = False
 
+    if IS_EN:
+        st.caption(f"Beta credits left: {int(remaining)}")
+    else:
+        st.caption(f"محاولات البيتا المتبقية: {int(remaining)}")
+
+# =========================
+# 2️⃣ Free Device Mode
+# =========================
+else:
+
+    try:
+        device_data = get_or_create_device(DEVICE_ID)
+        free_used = int(device_data.get("free_used", 0))
+        free_left = max(0, 3 - free_used)
+    except Exception:
+        free_left = 3
+
+    if IS_EN:
+        st.caption(f"Free uses left: {free_left}")
+    else:
+        st.caption(f"المحاولات المجانية المتبقية: {free_left}")
 with st.expander(TXT["exp_title"], expanded=True):
     st.markdown(TXT["exp_body"])
 
@@ -790,8 +820,122 @@ if f"{APP_ID}_result" not in st.session_state:
 # =========================================================
 # Generate button handler (with access gate)
 # =========================================================
+# =========================================================
+# Generate button handler (Device + Beta Gating)
+# =========================================================
+
 if st.button(TXT["btn"]):
-    # 0) Access gate first
+
+    t = (topic or "").strip()
+    g = (goal or "").strip()
+    a = (audience or "").strip()
+
+    if not t or not g:
+        st.warning(TXT["warn_empty"])
+        st.stop()
+
+    email = st.session_state.get("beta_email_openq")
+
+    # =====================================================
+    # 1️⃣ Beta Mode
+    # =====================================================
+    if email:
+
+        remaining = st.session_state.get("beta_remaining_openq")
+
+        if remaining is None:
+            remaining, hit = redeem_beta(email, DEVICE_ID)
+            st.session_state["beta_remaining_openq"] = remaining
+            st.session_state["hit_limit_openq"] = hit
+
+        if remaining <= 0 or st.session_state.get("hit_limit_openq"):
+
+            if IS_EN:
+                st.warning("You've used all beta credits. Join the Pro waitlist 👇")
+                wait_label = "Join Upgrade Waitlist"
+                success_msg = "You're on the waitlist ✅"
+            else:
+                st.warning("خلصت محاولات البيتا. انضم لقائمة الترقية 👇")
+                wait_label = "انضم لقائمة الترقية"
+                success_msg = "تم إضافتك للقائمة ✅"
+
+            if st.button(wait_label, key="waitlist_btn"):
+                join_waitlist(email, DEVICE_ID)
+                st.success(success_msg)
+
+            st.stop()
+
+    # =====================================================
+    # 2️⃣ Free Device Mode
+    # =====================================================
+    else:
+
+        allowed, left = consume_free(DEVICE_ID)
+
+        if not allowed:
+
+            if IS_EN:
+                st.info("You've used 3 free questions. Enter your email to unlock 7 more 👇")
+            else:
+                st.info("استخدمت 3 أسئلة مجانية. اكتب إيميلك لتحصل على 7 إضافية 👇")
+
+            show_gate_ui()
+            st.stop()
+
+        else:
+            if IS_EN:
+                st.caption(f"Free uses left on this device: {left}")
+            else:
+                st.caption(f"تبقى لك {left} محاولات مجانية على هذا الجهاز")
+
+    # =====================================================
+    # 3️⃣ CTA tracking
+    # =====================================================
+    track_cta_event(APP_ID)
+
+    # =====================================================
+    # 4️⃣ Rate limit
+    # =====================================================
+    if not can_call_model(min_seconds=8):
+        st.warning(TXT["wait"])
+        st.stop()
+
+    # =====================================================
+    # 5️⃣ Cache
+    # =====================================================
+    c_hash = make_hash(t, g, a, st.session_state["ui_lang"])
+    cached = cache_get(APP_ID, c_hash)
+
+    success = False
+
+    if cached and isinstance(cached, dict) and "Questions" in cached:
+        cached = _normalize_questions(cached, IS_EN)
+        if "error" not in cached:
+            st.session_state[f"{APP_ID}_result"] = cached
+            st.session_state[f"{APP_ID}_has_result"] = True
+            success = True
+
+    else:
+        with st.spinner(TXT["spinner"]):
+            res = generate_open_questions(t, g, a, IS_EN)
+
+        if isinstance(res, dict) and "error" not in res:
+            cache_set(APP_ID, c_hash, res)
+            st.session_state[f"{APP_ID}_result"] = res
+            st.session_state[f"{APP_ID}_has_result"] = True
+            success = True
+        else:
+            st.error(res.get("error", "Unknown error"))
+
+    # =====================================================
+    # 6️⃣ Consume credits AFTER successful generation
+    # =====================================================
+    if success:
+
+        if email:
+            remaining, hit = consume_beta(email)
+            st.session_state["beta_remaining_openq"] = remaining
+            st.session_state["hit_limit_openq"] = hit    # 0) Access gate first
     if not has_access_to_generate():
         st.stop()
 
@@ -994,6 +1138,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
