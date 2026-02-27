@@ -5,8 +5,7 @@ import time
 import re
 import hashlib
 from datetime import datetime, timezone
-import uuid
-from streamlit_cookies_manager import EncryptedCookieManager
+
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
 
@@ -23,18 +22,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-# ======================
-# Device ID via Cookies
-# ======================
-cookies = EncryptedCookieManager(prefix="openq_", password=os.environ.get("COOKIE_PASSWORD", "change-me-strong"))
-if not cookies.ready():
-    st.stop()
-
-if "device_id" not in cookies:
-    cookies["device_id"] = str(uuid.uuid4())
-    cookies.save()
-
-DEVICE_ID = cookies["device_id"]  # string uuid
 
 APP_ID = "10-open-question-builder"
 
@@ -50,8 +37,8 @@ INITIAL_DELAY = 3
 # =========================================================
 # LIMITS
 # =========================================================
-FREE_SESSION_USES = 3      # قبل طلب الإيميل (per session)
-BETA_EMAIL_USES = 7      # بعد إدخال الإيميل (stored in Supabase)
+FREE_SESSION_USES = 5       # قبل طلب الإيميل (per session)
+BETA_EMAIL_USES = 10        # بعد إدخال الإيميل (stored in Supabase)
 
 # NEW: Return 3 questions
 NUM_QUESTIONS = 3
@@ -325,68 +312,28 @@ if "beta_email_openq" not in st.session_state:
 
 if "beta_remaining_openq" not in st.session_state:
     st.session_state["beta_remaining_openq"] = None
-if "beta_email_openq" not in st.session_state:
-    st.session_state["beta_email_openq"] = None
 
-if "beta_remaining_openq" not in st.session_state:
-    st.session_state["beta_remaining_openq"] = None
-
-if "hit_limit_openq" not in st.session_state:
-    st.session_state["hit_limit_openq"] = False
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
-def redeem_beta(email: str, device_id: str) -> tuple[int, bool]:
-    """
-    Create/refresh beta user in Supabase and return:
-    (remaining_uses, hit_limit)
-    """
-    res = supabase.rpc(
-        "redeem_beta_email",
-        {
-            "p_email": email,
-            "p_device_id": device_id,
-            "p_beta_uses": BETA_EMAIL_USES,
-        },
-    ).execute()
-
+def redeem_beta(email: str) -> int:
+    """Create/refresh beta user in Supabase and return remaining uses."""
+    res = supabase.rpc("redeem_beta_email", {"p_email": email}).execute()
     data = getattr(res, "data", None) or []
-
-    if data and isinstance(data, list):
-        remaining = int(data[0].get("remaining_uses", 0))
-        hit = bool(data[0].get("hit_limit", False))
-        return remaining, hit
-
-    return BETA_EMAIL_USES, False
+    if data and isinstance(data, list) and "remaining_uses" in data[0]:
+        return int(data[0]["remaining_uses"])
+    return BETA_EMAIL_USES
 
 
-def consume_beta(email: str) -> tuple[int, bool]:
-    """
-    Decrement one beta credit and return:
-    (remaining_uses, hit_limit)
-    """
-    res = supabase.rpc(
-        "consume_beta_use",
-        {"p_email": email},
-    ).execute()
-
+def consume_beta(email: str) -> int:
+    """Decrement one beta credit in Supabase and return updated remaining uses."""
+    res = supabase.rpc("consume_beta_use", {"p_email": email}).execute()
     data = getattr(res, "data", None) or []
+    if data and isinstance(data, list) and "remaining_uses" in data[0]:
+        return int(data[0]["remaining_uses"])
+    return 0
 
-    if data and isinstance(data, list):
-        remaining = int(data[0].get("remaining_uses", 0))
-        hit = bool(data[0].get("hit_limit", False))
-        return remaining, hit
 
-    return 0, True
-
-def ensure_device(device_id: str):
-    supabase.rpc("ensure_device", {"p_device_id": device_id}).execute()
-def consume_free(device_id: str) -> tuple[bool, int]:
-    res = supabase.rpc("consume_free_use", {"p_device_id": device_id, "p_free_limit": FREE_DEVICE_USES}).execute()
-    row = (getattr(res, "data", None) or [])[0]
-    return bool(row["allowed"]), int(row["free_left"])
-def join_waitlist(email: str | None, device_id: str):
-    supabase.rpc("join_openq_waitlist", {"p_email": email or "", "p_device_id": device_id}).execute()    
 def show_gate_ui():
     st.subheader(TXT["gate_title"])
     st.info(TXT["gate_body"])
@@ -397,10 +344,9 @@ def show_gate_ui():
             st.warning(TXT["email_bad"])
             st.stop()
         try:
-            remaining, hit_limit = redeem_beta(email_clean)
+            remaining = redeem_beta(email_clean)
             st.session_state["beta_email_openq"] = email_clean
             st.session_state["beta_remaining_openq"] = remaining
-            st.session_state["hit_limit_openq"] = hit_limit
             st.success(TXT["beta_ok"])
             st.rerun()
         except Exception as e:
@@ -417,8 +363,8 @@ def has_access_to_generate() -> bool:
     if email:
         if beta_remaining is None:
             try:
-                beta_remaining, hit_limit = redeem_beta(email)
-                st.session_state["hit_limit_openq"] = hit_limit
+                beta_remaining = redeem_beta(email)
+                st.session_state["beta_remaining_openq"] = beta_remaining
             except Exception:
                 beta_remaining = 0
                 st.session_state["beta_remaining_openq"] = 0
@@ -447,9 +393,8 @@ def decrement_beta_use_if_any():
     if not email:
         return
     try:
-        remaining, hit = consume_beta(email)
+        remaining = consume_beta(email)
         st.session_state["beta_remaining_openq"] = remaining
-        st.session_state["hit_limit_openq"] = hit
     except Exception:
         pass
 
@@ -740,52 +685,22 @@ st.title(TXT["title"])
 st.caption(TXT["sub"])
 
 # Show counters (top)
-# =========================================================
-# Usage Status (Device + Beta)
-# =========================================================
-
-ensure_device(DEVICE_ID)
-
 email = st.session_state.get("beta_email_openq")
-
-# =========================
-# 1️⃣ Beta Mode
-# =========================
 if email:
-
     remaining = st.session_state.get("beta_remaining_openq")
-
     if remaining is None:
         try:
-            remaining, hit_limit = redeem_beta(email, DEVICE_ID)
+            remaining = redeem_beta(email)
             st.session_state["beta_remaining_openq"] = remaining
-            st.session_state["hit_limit_openq"] = hit_limit
         except Exception:
             remaining = 0
             st.session_state["beta_remaining_openq"] = 0
-            st.session_state["hit_limit_openq"] = False
-
-    if IS_EN:
-        st.caption(f"Beta credits left: {int(remaining)}")
-    else:
-        st.caption(f"محاولات البيتا المتبقية: {int(remaining)}")
-
-# =========================
-# 2️⃣ Free Device Mode
-# =========================
+    st.caption(f"{TXT['beta_left']}{int(remaining)}")
 else:
+    used = int(st.session_state.get("free_uses_openq", 0))
+    left = max(0, FREE_SESSION_USES - used)
+    st.caption(f"{TXT['free_left']}{left}")
 
-    try:
-        device_data = get_or_create_device(DEVICE_ID)
-        free_used = int(device_data.get("free_used", 0))
-        free_left = max(0, 3 - free_used)
-    except Exception:
-        free_left = 3
-
-    if IS_EN:
-        st.caption(f"Free uses left: {free_left}")
-    else:
-        st.caption(f"المحاولات المجانية المتبقية: {free_left}")
 with st.expander(TXT["exp_title"], expanded=True):
     st.markdown(TXT["exp_body"])
 
@@ -820,122 +735,8 @@ if f"{APP_ID}_result" not in st.session_state:
 # =========================================================
 # Generate button handler (with access gate)
 # =========================================================
-# =========================================================
-# Generate button handler (Device + Beta Gating)
-# =========================================================
-
 if st.button(TXT["btn"]):
-
-    t = (topic or "").strip()
-    g = (goal or "").strip()
-    a = (audience or "").strip()
-
-    if not t or not g:
-        st.warning(TXT["warn_empty"])
-        st.stop()
-
-    email = st.session_state.get("beta_email_openq")
-
-    # =====================================================
-    # 1️⃣ Beta Mode
-    # =====================================================
-    if email:
-
-        remaining = st.session_state.get("beta_remaining_openq")
-
-        if remaining is None:
-            remaining, hit = redeem_beta(email, DEVICE_ID)
-            st.session_state["beta_remaining_openq"] = remaining
-            st.session_state["hit_limit_openq"] = hit
-
-        if remaining <= 0 or st.session_state.get("hit_limit_openq"):
-
-            if IS_EN:
-                st.warning("You've used all beta credits. Join the Pro waitlist 👇")
-                wait_label = "Join Upgrade Waitlist"
-                success_msg = "You're on the waitlist ✅"
-            else:
-                st.warning("خلصت محاولات البيتا. انضم لقائمة الترقية 👇")
-                wait_label = "انضم لقائمة الترقية"
-                success_msg = "تم إضافتك للقائمة ✅"
-
-            if st.button(wait_label, key="waitlist_btn"):
-                join_waitlist(email, DEVICE_ID)
-                st.success(success_msg)
-
-            st.stop()
-
-    # =====================================================
-    # 2️⃣ Free Device Mode
-    # =====================================================
-    else:
-
-        allowed, left = consume_free(DEVICE_ID)
-
-        if not allowed:
-
-            if IS_EN:
-                st.info("You've used 3 free questions. Enter your email to unlock 7 more 👇")
-            else:
-                st.info("استخدمت 3 أسئلة مجانية. اكتب إيميلك لتحصل على 7 إضافية 👇")
-
-            show_gate_ui()
-            st.stop()
-
-        else:
-            if IS_EN:
-                st.caption(f"Free uses left on this device: {left}")
-            else:
-                st.caption(f"تبقى لك {left} محاولات مجانية على هذا الجهاز")
-
-    # =====================================================
-    # 3️⃣ CTA tracking
-    # =====================================================
-    track_cta_event(APP_ID)
-
-    # =====================================================
-    # 4️⃣ Rate limit
-    # =====================================================
-    if not can_call_model(min_seconds=8):
-        st.warning(TXT["wait"])
-        st.stop()
-
-    # =====================================================
-    # 5️⃣ Cache
-    # =====================================================
-    c_hash = make_hash(t, g, a, st.session_state["ui_lang"])
-    cached = cache_get(APP_ID, c_hash)
-
-    success = False
-
-    if cached and isinstance(cached, dict) and "Questions" in cached:
-        cached = _normalize_questions(cached, IS_EN)
-        if "error" not in cached:
-            st.session_state[f"{APP_ID}_result"] = cached
-            st.session_state[f"{APP_ID}_has_result"] = True
-            success = True
-
-    else:
-        with st.spinner(TXT["spinner"]):
-            res = generate_open_questions(t, g, a, IS_EN)
-
-        if isinstance(res, dict) and "error" not in res:
-            cache_set(APP_ID, c_hash, res)
-            st.session_state[f"{APP_ID}_result"] = res
-            st.session_state[f"{APP_ID}_has_result"] = True
-            success = True
-        else:
-            st.error(res.get("error", "Unknown error"))
-
-    # =====================================================
-    # 6️⃣ Consume credits AFTER successful generation
-    # =====================================================
-    if success:
-
-        if email:
-            remaining, hit = consume_beta(email)
-            st.session_state["beta_remaining_openq"] = remaining
-            st.session_state["hit_limit_openq"] = hit    # 0) Access gate first
+    # 0) Access gate first
     if not has_access_to_generate():
         st.stop()
 
@@ -1138,13 +939,3 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-
-
-
-
-
-
-
-
-
