@@ -34,6 +34,12 @@ MODEL_CANDIDATES = [
 MAX_RETRIES = 4
 INITIAL_DELAY = 3
 
+# =========================================================
+# NEW: LIMITS
+# =========================================================
+FREE_SESSION_USES = 5       # قبل طلب الإيميل (per session)
+BETA_EMAIL_USES = 10        # بعد إدخال الإيميل (stored in Supabase)
+
 
 # =========================================================
 # 1) LANGUAGE SWITCH
@@ -88,6 +94,21 @@ TXT = {
     "fb_ok": "Feedback saved ✅" if IS_EN else "تم حفظ الفيدباك ✅",
     "wait": "Please wait a few seconds before trying again." if IS_EN else "استني شوي قبل المحاولة مرة ثانية.",
     "err_missing_secrets": "⚠️ Missing secrets in Secrets/Env." if IS_EN else "⚠️ مفاتيح الربط ناقصة في Secrets/Env.",
+
+    # NEW: Gate text
+    "free_left": ("Free uses left: " if IS_EN else "المحاولات المجانية المتبقية: "),
+    "beta_left": ("Beta uses left: " if IS_EN else "محاولات البيتا المتبقية: "),
+    "gate_title": ("🔒 Unlock Beta Access" if IS_EN else "🔒 افتحي وصول البيتا"),
+    "gate_body": (
+        f"You’ve used your {FREE_SESSION_USES} free generations. Enter your email to get {BETA_EMAIL_USES} beta credits."
+        if IS_EN else
+        f"خلصتي {FREE_SESSION_USES} محاولات مجانية. اكتبي إيميلك لتحصلي على {BETA_EMAIL_USES} محاولات بيتا."
+    ),
+    "email_label": ("Email" if IS_EN else "الإيميل"),
+    "email_btn": ("Unlock" if IS_EN else "تفعيل"),
+    "email_bad": ("Please enter a valid email." if IS_EN else "رجاءً اكتبي إيميل صحيح."),
+    "beta_ok": (f"Beta unlocked ✅ You now have {BETA_EMAIL_USES} credits." if IS_EN else f"تم تفعيل البيتا ✅ صار عندك {BETA_EMAIL_USES} محاولات."),
+    "beta_empty": ("You’ve used all beta credits." if IS_EN else "خلصت محاولات البيتا."),
 }
 
 
@@ -216,6 +237,107 @@ textarea, input {{
 
 
 # =========================================================
+# NEW: SESSION STATE + EMAIL HELPERS
+# =========================================================
+if "free_uses_openq" not in st.session_state:
+    st.session_state["free_uses_openq"] = 0
+
+if "beta_email_openq" not in st.session_state:
+    st.session_state["beta_email_openq"] = None
+
+if "beta_remaining_openq" not in st.session_state:
+    st.session_state["beta_remaining_openq"] = None
+
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def redeem_beta(email: str) -> int:
+    """Create/refresh beta user in Supabase and return remaining uses."""
+    res = supabase.rpc("redeem_beta_email", {"p_email": email}).execute()
+    data = getattr(res, "data", None) or []
+    if data and isinstance(data, list) and "remaining_uses" in data[0]:
+        return int(data[0]["remaining_uses"])
+    # fallback
+    return BETA_EMAIL_USES
+
+
+def consume_beta(email: str) -> int:
+    """Decrement one beta credit in Supabase and return updated remaining uses."""
+    res = supabase.rpc("consume_beta_use", {"p_email": email}).execute()
+    data = getattr(res, "data", None) or []
+    if data and isinstance(data, list) and "remaining_uses" in data[0]:
+        return int(data[0]["remaining_uses"])
+    return 0
+
+
+def show_gate_ui():
+    st.subheader(TXT["gate_title"])
+    st.info(TXT["gate_body"])
+    email = st.text_input(TXT["email_label"], key="beta_email_input_openq")
+    if st.button(TXT["email_btn"], key="beta_email_btn_openq"):
+        email_clean = (email or "").strip().lower()
+        if not EMAIL_RE.match(email_clean):
+            st.warning(TXT["email_bad"])
+            st.stop()
+        try:
+            remaining = redeem_beta(email_clean)
+            st.session_state["beta_email_openq"] = email_clean
+            st.session_state["beta_remaining_openq"] = remaining
+            st.success(TXT["beta_ok"])
+            st.rerun()
+        except Exception as e:
+            st.error(str(e))
+            st.stop()
+
+
+def has_access_to_generate() -> bool:
+    """Return True if user can generate now; otherwise show gate and return False."""
+    email = st.session_state.get("beta_email_openq")
+    beta_remaining = st.session_state.get("beta_remaining_openq")
+
+    # Beta path
+    if email:
+        # If we don't have remaining cached, fetch once
+        if beta_remaining is None:
+            try:
+                beta_remaining = redeem_beta(email)
+                st.session_state["beta_remaining_openq"] = beta_remaining
+            except Exception:
+                beta_remaining = 0
+                st.session_state["beta_remaining_openq"] = 0
+
+        if int(beta_remaining) <= 0:
+            st.warning(TXT["beta_empty"])
+            return False
+
+        return True
+
+    # Free session path
+    used = int(st.session_state.get("free_uses_openq", 0))
+    if used >= FREE_SESSION_USES:
+        show_gate_ui()
+        return False
+
+    return True
+
+
+def increment_free_use():
+    st.session_state["free_uses_openq"] = int(st.session_state.get("free_uses_openq", 0)) + 1
+
+
+def decrement_beta_use_if_any():
+    email = st.session_state.get("beta_email_openq")
+    if not email:
+        return
+    try:
+        remaining = consume_beta(email)
+        st.session_state["beta_remaining_openq"] = remaining
+    except Exception:
+        # if RPC fails, don't crash the app; just keep local state
+        pass
+
+
+# =========================================================
 # 4) MODEL PICKER (ping once + store)
 # =========================================================
 def get_working_model() -> str:
@@ -324,7 +446,6 @@ def _extract_json_block(t: str) -> str:
     s = t.strip()
     if s.startswith("```"):
         s = s.replace("```json", "").replace("```", "").strip()
-    # try to locate first { ... last }
     start = s.find("{")
     end = s.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -403,6 +524,23 @@ Return ONLY JSON with EXACT keys:
 st.title(TXT["title"])
 st.caption(TXT["sub"])
 
+# Show counters (top)
+email = st.session_state.get("beta_email_openq")
+if email:
+    remaining = st.session_state.get("beta_remaining_openq")
+    if remaining is None:
+        try:
+            remaining = redeem_beta(email)
+            st.session_state["beta_remaining_openq"] = remaining
+        except Exception:
+            remaining = 0
+            st.session_state["beta_remaining_openq"] = 0
+    st.caption(f"{TXT['beta_left']}{int(remaining)}")
+else:
+    used = int(st.session_state.get("free_uses_openq", 0))
+    left = max(0, FREE_SESSION_USES - used)
+    st.caption(f"{TXT['free_left']}{left}")
+
 with st.expander(TXT["exp_title"], expanded=True):
     st.markdown(TXT["exp_body"])
 
@@ -410,19 +548,38 @@ st.markdown("---")
 
 col1, col2 = st.columns([2, 1])
 with col1:
-    topic = st.text_area(TXT["topic"], height=140, placeholder=("e.g., AI tools & content saturation..." if IS_EN else "مثال: تشبّع المحتوى في الذكاء الاصطناعي..."))
+    topic = st.text_area(
+        TXT["topic"],
+        height=140,
+        placeholder=("e.g., AI tools & content saturation..." if IS_EN else "مثال: تشبّع المحتوى في الذكاء الاصطناعي...")
+    )
 with col2:
-    audience = st.text_input(TXT["aud"], placeholder=("e.g., founders, creators, AI builders" if IS_EN else "مثال: مؤسسين، صناع محتوى، AI builders"))
+    audience = st.text_input(
+        TXT["aud"],
+        placeholder=("e.g., founders, creators, AI builders" if IS_EN else "مثال: مؤسسين، صناع محتوى، AI builders")
+    )
 
-goal = st.text_area(TXT["goal"], height=110, placeholder=("What do you want people to write?" if IS_EN else "شو بدك الناس تكتب؟ (آراء/تجارب/نقاش...)"))
+goal = st.text_area(
+    TXT["goal"],
+    height=110,
+    placeholder=("What do you want people to write?" if IS_EN else "شو بدك الناس تكتب؟ (آراء/تجارب/نقاش...)")
+)
 
-# session state
+# session state for result
 if f"{APP_ID}_has_result" not in st.session_state:
     st.session_state[f"{APP_ID}_has_result"] = False
 if f"{APP_ID}_result" not in st.session_state:
     st.session_state[f"{APP_ID}_result"] = None
 
+
+# =========================================================
+# Generate button handler (with access gate)
+# =========================================================
 if st.button(TXT["btn"]):
+    # 0) Access gate first
+    if not has_access_to_generate():
+        st.stop()
+
     t = (topic or "").strip()
     g = (goal or "").strip()
     a = (audience or "").strip()
@@ -443,9 +600,11 @@ if st.button(TXT["btn"]):
     c_hash = make_hash(t, g, a, st.session_state["ui_lang"])
     cached = cache_get(APP_ID, c_hash)
 
+    success = False
     if cached and isinstance(cached, dict) and "GeneratedQuestion" in cached:
         st.session_state[f"{APP_ID}_result"] = cached
         st.session_state[f"{APP_ID}_has_result"] = True
+        success = True
     else:
         with st.spinner(TXT["spinner"]):
             res = generate_open_question(t, g, a, IS_EN)
@@ -454,8 +613,16 @@ if st.button(TXT["btn"]):
             cache_set(APP_ID, c_hash, res)
             st.session_state[f"{APP_ID}_result"] = res
             st.session_state[f"{APP_ID}_has_result"] = True
+            success = True
         else:
             st.error(res.get("error", "Unknown error"))
+
+    # 1) Consume credit ONLY on success
+    if success:
+        if st.session_state.get("beta_email_openq"):
+            decrement_beta_use_if_any()
+        else:
+            increment_free_use()
 
 
 # =========================================================
@@ -547,4 +714,3 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
