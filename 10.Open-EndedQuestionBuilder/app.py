@@ -500,15 +500,17 @@ def generate_open_questions(topic: str, goal: str, audience: str, is_en: bool) -
     lang_name = "English" if is_en else "Arabic"
 
     system_prompt = (
-        "You are a high-level Conversation Strategist for social media growth. "
-        "Generate EXACTLY 3 open-ended questions, each with a distinct strategic style:\n"
-        "1) Bold / Provocative (slightly challenging, creates tension or debate)\n"
-        "2) Curious / Exploratory (invites sharing experiences and perspectives)\n"
-        "3) Deep / Strategic (thoughtful, reflective, encourages long-form answers)\n\n"
-        "Each question must avoid simple Yes/No answers and must trigger long comments.\n"
-        f"Return output in {lang_name}. "
-        "Return ONLY valid JSON. No extra text."
-    )
+    "You are a high-level Conversation Strategist for social media growth. "
+    "Generate EXACTLY 3 open-ended questions with distinct styles:\n"
+    "1) Bold / Provocative\n"
+    "2) Curious / Exploratory\n"
+    "3) Deep / Strategic\n\n"
+    "Each question must avoid Yes/No answers.\n"
+    "If the UI language is Arabic, you MUST write everything in Arabic only. "
+    "If the UI language is English, you MUST write everything in English only. "
+    "Do not mix languages. "
+    "Return ONLY valid JSON."
+)
 
     prompt = f"""
 Generate EXACTLY 3 open-ended questions + a short analysis explaining why they work.
@@ -730,16 +732,27 @@ if st.button(TXT["btn"]):
 data = st.session_state.get(f"{APP_ID}_result") if st.session_state.get(f"{APP_ID}_has_result") else None
 
 if isinstance(data, dict) and data and "Questions" in data:
-    qs = data.get("Questions") or []
 
     st.markdown("---")
 
-    q_blocks = ""
-    for i, item in enumerate(qs, start=1):
-        style = item.get("Style", "")
-        question = item.get("Question", "")
+    qs = data.get("Questions") or []
 
-        label = f"{style} Style" if IS_EN else f"نمط {style}"
+    q_blocks = ""
+
+    for i, item in enumerate(qs, start=1):
+
+        if isinstance(item, dict):
+            style = item.get("Style", "")
+            question = item.get("Question", "")
+        else:
+            style = ""
+            question = str(item)
+
+        # Arabic labels
+        if IS_EN:
+            label = f"Option {i}" if not style else f"{style} Style"
+        else:
+            label = f"خيار {i}" if not style else f"نمط {style}"
 
         q_blocks += f"""
         <div class="result-title" style="margin-top:12px;">{label}</div>
@@ -827,4 +840,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
