@@ -89,7 +89,7 @@ TXT = {
     "fb_btn": "✅ Submit feedback" if IS_EN else "✅ إرسال الفيدباك",
     "fb_warn": "Write at least one line." if IS_EN else "اكتب سطر واحد على الأقل 🙏",
     "fb_ok": "Feedback saved ✅" if IS_EN else "تم حفظ الفيدباك ✅",
-    "wait": "Please wait a few seconds before trying again." if IS_EN else "استني شوي قبل المحاولة مرة ثانية.",
+    "wait": "Please wait a few seconds before trying again." if IS_EN else "انتظر قليلا قبل المحاولة مرة ثانية.",
     "err_missing_secrets": "⚠️ Missing secrets in Secrets/Env." if IS_EN else "⚠️ مفاتيح الربط ناقصة في Secrets/Env.",
 }
 
@@ -697,4 +697,5 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
