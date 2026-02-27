@@ -740,19 +740,32 @@ if isinstance(data, dict) and data and "Questions" in data:
 
     for i, item in enumerate(qs, start=1):
 
-        if isinstance(item, dict):
-            style = item.get("Style", "")
-            question = item.get("Question", "")
-        else:
-            style = ""
-            question = str(item)
+    if isinstance(item, dict):
+        style = item.get("Style", "")
+        question = item.get("Question", "")
+    else:
+        style = ""
+        question = str(item)
 
-        if IS_EN:
-            label = f"Option {i}" if not style else f"{style} Style"
-        else:
-            label = f"الخيار {i}" if not style else f"نمط {style}"
+    if IS_EN:
+        label_map = {
+            "Bold": "🔥 Bold Question",
+            "Curious": "🔎 Curious Question",
+            "Deep": "🧠 Deep Strategic Question",
+        }
+    else:
+        label_map = {
+            "Bold": "🔥 سؤال جريء",
+            "Curious": "🔎 سؤال فضولي",
+            "Deep": "🧠 سؤال استراتيجي عميق",
+        }
 
-        st.markdown(f"**{label}**")
+    label = label_map.get(
+        style,
+        f"الخيار {i}" if not IS_EN else f"Option {i}"
+    )
+
+    st.markdown(f"**{label}**")
         st.markdown(
             f"""
 <div class="result-block">
@@ -841,6 +854,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
