@@ -496,20 +496,22 @@ def _normalize_questions(obj: dict, is_en: bool) -> dict:
 
     return obj
 
-
 def generate_open_questions(topic: str, goal: str, audience: str, is_en: bool) -> dict:
     lang_name = "English" if is_en else "Arabic"
 
     system_prompt = (
-        "You are a Conversation Catalyst for social media. "
-        f"Generate EXACTLY {NUM_QUESTIONS} highly engaging open-ended questions that compel long, detailed responses. "
-        "Each question must avoid simple Yes/No answers. "
+        "You are a high-level Conversation Strategist for social media growth. "
+        "Generate EXACTLY 3 open-ended questions, each with a distinct strategic style:\n"
+        "1) Bold / Provocative (slightly challenging, creates tension or debate)\n"
+        "2) Curious / Exploratory (invites sharing experiences and perspectives)\n"
+        "3) Deep / Strategic (thoughtful, reflective, encourages long-form answers)\n\n"
+        "Each question must avoid simple Yes/No answers and must trigger long comments.\n"
         f"Return output in {lang_name}. "
         "Return ONLY valid JSON. No extra text."
     )
 
     prompt = f"""
-Generate EXACTLY {NUM_QUESTIONS} open-ended questions + a short analysis explaining why they work.
+Generate EXACTLY 3 open-ended questions + a short analysis explaining why they work.
 
 Inputs:
 - Topic: {topic}
@@ -518,7 +520,20 @@ Inputs:
 
 Return ONLY JSON with EXACT keys:
 {{
-  "Questions": ["string", "string", "string"],
+  "Questions": [
+    {{
+      "Style": "Bold",
+      "Question": "string"
+    }},
+    {{
+      "Style": "Curious",
+      "Question": "string"
+    }},
+    {{
+      "Style": "Deep",
+      "Question": "string"
+    }}
+  ],
   "EffectivenessAnalysis": "string"
 }}
 """
@@ -528,7 +543,14 @@ Return ONLY JSON with EXACT keys:
         "properties": {
             "Questions": {
                 "type": "ARRAY",
-                "items": {"type": "STRING"},
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "Style": {"type": "STRING"},
+                        "Question": {"type": "STRING"},
+                    },
+                    "required": ["Style", "Question"],
+                },
             },
             "EffectivenessAnalysis": {"type": "STRING"},
         },
@@ -539,8 +561,8 @@ Return ONLY JSON with EXACT keys:
         system_instruction=system_prompt,
         response_mime_type="application/json",
         response_schema=response_schema,
-        temperature=0.5,
-        max_output_tokens=850,
+        temperature=0.6,
+        max_output_tokens=900,
     )
 
     last_err = None
@@ -554,10 +576,34 @@ Return ONLY JSON with EXACT keys:
             raw = _extract_json_block(getattr(resp, "text", "") or "")
             if not raw:
                 return {"error": "Empty response" if is_en else "استجابة فارغة"}
+
             obj = json.loads(raw)
-            obj = _normalize_questions(obj, is_en)
-            if "error" in obj:
-                return obj
+
+            # Normalize structure
+            questions = obj.get("Questions", [])
+            cleaned = []
+
+            for q in questions:
+                if isinstance(q, dict):
+                    style = q.get("Style", "").strip()
+                    question_text = q.get("Question", "").strip()
+                    if question_text:
+                        cleaned.append({
+                            "Style": style,
+                            "Question": question_text
+                        })
+
+            while len(cleaned) < 3:
+                cleaned.append({
+                    "Style": "—",
+                    "Question": "—"
+                })
+
+            obj["Questions"] = cleaned[:3]
+
+            if "EffectivenessAnalysis" not in obj:
+                obj["EffectivenessAnalysis"] = ""
+
             return obj
 
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
@@ -568,7 +614,6 @@ Return ONLY JSON with EXACT keys:
             break
 
     return {"error": str(last_err) if last_err else ("Model error" if is_en else "خطأ في الموديل")}
-
 
 # =========================================================
 # 8) UI
@@ -686,18 +731,19 @@ data = st.session_state.get(f"{APP_ID}_result") if st.session_state.get(f"{APP_I
 
 if isinstance(data, dict) and data and "Questions" in data:
     qs = data.get("Questions") or []
-    if not isinstance(qs, list):
-        qs = []
 
     st.markdown("---")
 
-    # Build questions blocks
     q_blocks = ""
-    for i, q in enumerate(qs[:NUM_QUESTIONS], start=1):
-        label = f"Option {i}" if IS_EN else f"خيار {i}"
+    for i, item in enumerate(qs, start=1):
+        style = item.get("Style", "")
+        question = item.get("Question", "")
+
+        label = f"{style} Style" if IS_EN else f"نمط {style}"
+
         q_blocks += f"""
-        <div class="result-title" style="margin-top:10px;">{label}</div>
-        <div class="result-block">{q}</div>
+        <div class="result-title" style="margin-top:12px;">{label}</div>
+        <div class="result-block">{question}</div>
         """
 
     st.markdown(
@@ -712,7 +758,6 @@ if isinstance(data, dict) and data and "Questions" in data:
 """,
         unsafe_allow_html=True,
     )
-
     # Feedback
     st.divider()
     st.subheader(TXT["fb_title"])
@@ -782,3 +827,4 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
