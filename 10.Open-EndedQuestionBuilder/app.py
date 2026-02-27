@@ -803,93 +803,46 @@ def escape_html(s: str) -> str:
 data = st.session_state.get(f"{APP_ID}_result") if st.session_state.get(f"{APP_ID}_has_result") else None
 
 if isinstance(data, dict) and data and "Questions" in data:
+
     qs = data.get("Questions") or []
 
     st.markdown("---")
+    st.markdown(f"### {TXT['result_title']}")
 
-    # Labels (مثل اللي كتبتيه)
-    if IS_EN:
-        label_map = {
-            "Bold": "🔥 Bold Question",
-            "Curious": "🔎 Curious Question",
-            "Deep": "🧠 Deep Strategic Question",
-        }
-    else:
-        label_map = {
-            "Bold": "🔥 سؤال جريء",
-            "Curious": "🔎 سؤال فضولي",
-            "Deep": "🧠 سؤال استراتيجي عميق",
-        }
-
-    q_blocks = ""
     for i, item in enumerate(qs, start=1):
-        style = (item.get("Style") or "").strip()
-        question = (item.get("Question") or "").strip()
 
-        label = label_map.get(style, (f"الخيار {i}" if not IS_EN else f"Option {i}"))
+        style = item.get("Style", "")
+        question = item.get("Question", "")
 
-        # Choose CSS class + icon
-        if style == "Bold":
-            box_class = "result-block bold-box"
-            icon = "🔥"
-        elif style == "Curious":
-            box_class = "result-block curious-box"
-            icon = "🔎"
-        elif style == "Deep":
-            box_class = "result-block deep-box"
-            icon = "🧠"
+        if not question or "<" in question:
+            continue
+
+        if IS_EN:
+            label_map = {
+                "Bold": "🔥 Bold Question",
+                "Curious": "🔎 Curious Question",
+                "Deep": "🧠 Deep Strategic Question",
+            }
         else:
-            box_class = "result-block"
-            icon = "💬"
+            label_map = {
+                "Bold": "🔥 سؤال جريء",
+                "Curious": "🔎 سؤال فضولي",
+                "Deep": "🧠 سؤال استراتيجي عميق",
+            }
 
-        # Unique ids for copy
-        q_id = f"q_{APP_ID}_{i}"
+        label = label_map.get(style, f"الخيار {i}" if not IS_EN else f"Option {i}")
 
-        # Escape to avoid HTML showing / injection
-        safe_q = escape_html(question)
+        st.markdown(f"**{label}**")
+        st.markdown(f"<div class='result-block'>{escape_html(question)}</div>", unsafe_allow_html=True)
 
-        copy_label = ("Copy" if IS_EN else "نسخ السؤال")
-        copied_msg = ("Copied ✅" if IS_EN else "تم النسخ ✅")
+        if st.button("نسخ السؤال" if not IS_EN else "Copy question", key=f"copy_{i}"):
+            st.toast("تم النسخ ✅" if not IS_EN else "Copied ✅")
 
-        q_blocks += f"""
-        <div class="result-title" style="margin-top:14px;">
-            <span class="icon-anim">{icon}</span>{escape_html(label)}
-        </div>
-
-        <div class="{box_class}" id="{q_id}_text">{safe_q}</div>
-
-        <div class="copy-row">
-          <button class="copy-btn" onclick="
-            navigator.clipboard.writeText(document.getElementById('{q_id}_text').innerText);
-            this.innerText = '{copied_msg}';
-            setTimeout(() => this.innerText = '{copy_label}', 1200);
-          ">
-            💬 {copy_label}
-          </button>
-        </div>
-        """
-
-    # Render the final card
-    st.markdown(
-        f"""
-<div class="result-card">
-  <div class="result-title">{TXT["result_title"]}</div>
-  {q_blocks}
-
-  <div class="result-title" style="margin-top:16px;">{TXT["analysis_title"]}</div>
-  <div class="result-block">{escape_html(data.get("EffectivenessAnalysis","—"))}</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+    # 🔹 هنا فقط تحليل واحد
     st.markdown("---")
     st.markdown(f"### {TXT['analysis_title']}")
     st.markdown(
-        f"""
-<div class="result-block">
-{data.get("EffectivenessAnalysis","—")}
-</div>
-""",
+        f"<div class='result-block'>{escape_html(data.get('EffectivenessAnalysis','—'))}</div>",
         unsafe_allow_html=True
     )
     # Feedback
@@ -961,6 +914,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
