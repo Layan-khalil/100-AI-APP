@@ -800,6 +800,10 @@ def escape_html(s: str) -> str:
 # =========================================================
 # 9) RESULTS + FEEDBACK
 # =========================================================
+# =========================================================
+# 9) RESULTS + FEEDBACK
+# =========================================================
+
 data = st.session_state.get(f"{APP_ID}_result") if st.session_state.get(f"{APP_ID}_has_result") else None
 
 if isinstance(data, dict) and data and "Questions" in data:
@@ -811,12 +815,19 @@ if isinstance(data, dict) and data and "Questions" in data:
 
     for i, item in enumerate(qs, start=1):
 
-        style = item.get("Style", "")
-        question = item.get("Question", "")
+        # دعم الحالتين (dict أو string)
+        if isinstance(item, dict):
+            style = item.get("Style", "")
+            question = item.get("Question", "")
+        else:
+            style = ""
+            question = str(item)
 
-        if not question or "<" in question:
+        # فلترة أي HTML أو خروج غير منطقي
+        if not question or "<" in question or len(question.strip()) < 5:
             continue
 
+        # Labels حسب اللغة
         if IS_EN:
             label_map = {
                 "Bold": "🔥 Bold Question",
@@ -830,21 +841,35 @@ if isinstance(data, dict) and data and "Questions" in data:
                 "Deep": "🧠 سؤال استراتيجي عميق",
             }
 
-        label = label_map.get(style, f"الخيار {i}" if not IS_EN else f"Option {i}")
+        label = label_map.get(
+            style,
+            f"الخيار {i}" if not IS_EN else f"Option {i}"
+        )
 
+        # عرض السؤال
         st.markdown(f"**{label}**")
-        st.markdown(f"<div class='result-block'>{escape_html(question)}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='result-block'>{escape_html(question)}</div>",
+            unsafe_allow_html=True
+        )
 
-        if st.button("نسخ السؤال" if not IS_EN else "Copy question", key=f"copy_{i}"):
-            st.toast("تم النسخ ✅" if not IS_EN else "Copied ✅")
+        # زر نسخ
+        copy_label = "نسخ السؤال" if not IS_EN else "Copy question"
+        copied_msg = "تم النسخ ✅" if not IS_EN else "Copied ✅"
 
-    # 🔹 هنا فقط تحليل واحد
-    st.markdown("---")
-    st.markdown(f"### {TXT['analysis_title']}")
-    st.markdown(
-        f"<div class='result-block'>{escape_html(data.get('EffectivenessAnalysis','—'))}</div>",
-        unsafe_allow_html=True
-    )
+        if st.button(copy_label, key=f"copy_{APP_ID}_{i}"):
+            st.toast(copied_msg)
+
+    # ===== التحليل (مرة واحدة فقط) =====
+    analysis_text = data.get("EffectivenessAnalysis", "").strip()
+
+    if analysis_text:
+        st.markdown("---")
+        st.markdown(f"### {TXT['analysis_title']}")
+        st.markdown(
+            f"<div class='result-block'>{escape_html(analysis_text)}</div>",
+            unsafe_allow_html=True
+        )
     # Feedback
     st.divider()
     st.subheader(TXT["fb_title"])
@@ -914,6 +939,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
