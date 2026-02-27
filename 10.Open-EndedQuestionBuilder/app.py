@@ -261,9 +261,9 @@ textarea, input {{
 }}
 
 @keyframes floaty {{
-  0% { transform: translateY(0); opacity: 0.85; }
-  50% { transform: translateY(-4px); opacity: 1; }
-  100% { transform: translateY(0); opacity: 0.85; }
+  0% {{ transform: translateY(0); opacity: 0.85; }}
+  50% {{ transform: translateY(-4px); opacity: 1; }}
+  100% {{ transform: translateY(0); opacity: 0.85; }}
 }}
 
 /* ====== Copy button ====== */
@@ -961,6 +961,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
