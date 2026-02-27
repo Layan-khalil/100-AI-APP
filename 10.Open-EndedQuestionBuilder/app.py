@@ -597,27 +597,7 @@ if isinstance(data, dict) and data and "Questions" in data:
             unsafe_allow_html=True
         )
 
-        copy_label = "Copy question" if IS_EN else "نسخ السؤال"
-        copied_msg = "Copied ✅" if IS_EN else "تم النسخ ✅"
-        question_safe = escape_html(question)
-        copy_id = f"copy_text_{APP_ID}_{i}"
 
-        st.markdown(
-          f"""
-        <div class="copy-row">
-          <div class="result-block" id="{copy_id}">
-           {question_safe}
-          </div>
-
-          <button class="copy-btn"
-           onclick="navigator.clipboard.writeText(document.getElementById('{copy_id}').innerText);
-           this.innerText='{'Copied ✅' if IS_EN else 'تم النسخ ✅'}';">
-           {'Copy question' if IS_EN else 'نسخ السؤال'}
-          </button>
-        </div>
-      """,
-         unsafe_allow_html=True
-)
 
     analysis_text = (data.get("EffectivenessAnalysis") or "").strip()
     if analysis_text:
@@ -697,5 +677,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
