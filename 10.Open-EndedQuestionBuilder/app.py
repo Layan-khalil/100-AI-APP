@@ -734,10 +734,9 @@ data = st.session_state.get(f"{APP_ID}_result") if st.session_state.get(f"{APP_I
 if isinstance(data, dict) and data and "Questions" in data:
 
     st.markdown("---")
+    st.markdown(f"### {TXT['result_title']}")
 
     qs = data.get("Questions") or []
-
-    q_blocks = ""
 
     for i, item in enumerate(qs, start=1):
 
@@ -748,28 +747,30 @@ if isinstance(data, dict) and data and "Questions" in data:
             style = ""
             question = str(item)
 
-        # Arabic labels
         if IS_EN:
             label = f"Option {i}" if not style else f"{style} Style"
         else:
-            label = f"خيار {i}" if not style else f"نمط {style}"
+            label = f"الخيار {i}" if not style else f"نمط {style}"
 
-        q_blocks += f"""
-        <div class="result-title" style="margin-top:12px;">{label}</div>
-        <div class="result-block">{question}</div>
-        """
-
-    st.markdown(
-        f"""
-<div class="result-card">
-  <div class="result-title">{TXT["result_title"]}</div>
-  {q_blocks}
-
-  <div class="result-title" style="margin-top:16px;">{TXT["analysis_title"]}</div>
-  <div class="result-block">{data.get("EffectivenessAnalysis","—")}</div>
+        st.markdown(f"**{label}**")
+        st.markdown(
+            f"""
+<div class="result-block">
+{question}
 </div>
 """,
-        unsafe_allow_html=True,
+            unsafe_allow_html=True
+        )
+
+    st.markdown("---")
+    st.markdown(f"### {TXT['analysis_title']}")
+    st.markdown(
+        f"""
+<div class="result-block">
+{data.get("EffectivenessAnalysis","—")}
+</div>
+""",
+        unsafe_allow_html=True
     )
     # Feedback
     st.divider()
@@ -840,5 +841,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
