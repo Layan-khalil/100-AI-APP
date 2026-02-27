@@ -234,6 +234,67 @@ textarea, input {{
     direction: rtl !important;
     text-align: center !important;
 }}
+/* ====== Shadows + Colors per type ====== */
+.bold-box {{
+  background: rgba(239, 68, 68, 0.12);
+  border-right: 6px solid #ef4444;
+  box-shadow: 0 10px 26px rgba(239, 68, 68, 0.18);
+}}
+
+.curious-box {{
+  background: rgba(59, 130, 246, 0.12);
+  border-right: 6px solid #3b82f6;
+  box-shadow: 0 10px 26px rgba(59, 130, 246, 0.18);
+}}
+
+.deep-box {{
+  background: rgba(139, 92, 246, 0.12);
+  border-right: 6px solid #8b5cf6;
+  box-shadow: 0 10px 26px rgba(139, 92, 246, 0.18);
+}}
+
+/* ====== Icon animation ====== */
+.icon-anim {{
+  display: inline-block;
+  margin-left: 8px; /* RTL friendly */
+  animation: floaty 2.2s ease-in-out infinite;
+}}
+
+@keyframes floaty {{
+  0% { transform: translateY(0); opacity: 0.85; }
+  50% { transform: translateY(-4px); opacity: 1; }
+  100% { transform: translateY(0); opacity: 0.85; }
+}}
+
+/* ====== Copy button ====== */
+.copy-btn {{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(17,24,39,0.35);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 0.95em;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}}
+
+.copy-btn:hover {{
+  filter: brightness(1.05);
+  transform: scale(1.02);
+}}
+
+.copy-row {{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -725,28 +786,28 @@ if st.button(TXT["btn"]):
         else:
             increment_free_use()
 
-
+def escape_html(s: str) -> str:
+    if s is None:
+        return ""
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#039;")
+    )
 # =========================================================
 # 9) RESULTS + FEEDBACK
 # =========================================================
 data = st.session_state.get(f"{APP_ID}_result") if st.session_state.get(f"{APP_ID}_has_result") else None
 
 if isinstance(data, dict) and data and "Questions" in data:
-
-    st.markdown("---")
-    st.markdown(f"### {TXT['result_title']}")
-
     qs = data.get("Questions") or []
 
-    for i, item in enumerate(qs, start=1):
+    st.markdown("---")
 
-    if isinstance(item, dict):
-        style = item.get("Style", "")
-        question = item.get("Question", "")
-    else:
-        style = ""
-        question = str(item)
-
+    # Labels (مثل اللي كتبتيه)
     if IS_EN:
         label_map = {
             "Bold": "🔥 Bold Question",
@@ -760,21 +821,67 @@ if isinstance(data, dict) and data and "Questions" in data:
             "Deep": "🧠 سؤال استراتيجي عميق",
         }
 
-    label = label_map.get(
-        style,
-        f"الخيار {i}" if not IS_EN else f"Option {i}"
-    )
+    q_blocks = ""
+    for i, item in enumerate(qs, start=1):
+        style = (item.get("Style") or "").strip()
+        question = (item.get("Question") or "").strip()
 
-    st.markdown(f"**{label}**")
-        st.markdown(
-            f"""
-<div class="result-block">
-{question}
+        label = label_map.get(style, (f"الخيار {i}" if not IS_EN else f"Option {i}"))
+
+        # Choose CSS class + icon
+        if style == "Bold":
+            box_class = "result-block bold-box"
+            icon = "🔥"
+        elif style == "Curious":
+            box_class = "result-block curious-box"
+            icon = "🔎"
+        elif style == "Deep":
+            box_class = "result-block deep-box"
+            icon = "🧠"
+        else:
+            box_class = "result-block"
+            icon = "💬"
+
+        # Unique ids for copy
+        q_id = f"q_{APP_ID}_{i}"
+
+        # Escape to avoid HTML showing / injection
+        safe_q = escape_html(question)
+
+        copy_label = ("Copy" if IS_EN else "نسخ السؤال")
+        copied_msg = ("Copied ✅" if IS_EN else "تم النسخ ✅")
+
+        q_blocks += f"""
+        <div class="result-title" style="margin-top:14px;">
+            <span class="icon-anim">{icon}</span>{escape_html(label)}
+        </div>
+
+        <div class="{box_class}" id="{q_id}_text">{safe_q}</div>
+
+        <div class="copy-row">
+          <button class="copy-btn" onclick="
+            navigator.clipboard.writeText(document.getElementById('{q_id}_text').innerText);
+            this.innerText = '{copied_msg}';
+            setTimeout(() => this.innerText = '{copy_label}', 1200);
+          ">
+            💬 {copy_label}
+          </button>
+        </div>
+        """
+
+    # Render the final card
+    st.markdown(
+        f"""
+<div class="result-card">
+  <div class="result-title">{TXT["result_title"]}</div>
+  {q_blocks}
+
+  <div class="result-title" style="margin-top:16px;">{TXT["analysis_title"]}</div>
+  <div class="result-block">{escape_html(data.get("EffectivenessAnalysis","—"))}</div>
 </div>
 """,
-            unsafe_allow_html=True
-        )
-
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
     st.markdown(f"### {TXT['analysis_title']}")
     st.markdown(
@@ -854,6 +961,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
