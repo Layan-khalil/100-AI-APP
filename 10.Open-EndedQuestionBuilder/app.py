@@ -35,10 +35,14 @@ MAX_RETRIES = 4
 INITIAL_DELAY = 3
 
 # =========================================================
-# NEW: LIMITS
+# LIMITS
 # =========================================================
 FREE_SESSION_USES = 5       # قبل طلب الإيميل (per session)
 BETA_EMAIL_USES = 10        # بعد إدخال الإيميل (stored in Supabase)
+
+# NEW: Return 3 questions
+NUM_QUESTIONS = 3
+CACHE_VERSION_TAG = "v2_3q"   # to avoid mixing old cache results
 
 
 # =========================================================
@@ -58,27 +62,27 @@ ALIGN = "left" if IS_EN else "right"
 TXT = {
     "title": "💡 Open Question Builder" if IS_EN else "💡 مُنشئ الأسئلة المفتوحة",
     "sub": (
-        "Generate a discussion-triggering, open-ended question + a short effectiveness analysis."
+        "Generate 3 discussion-triggering open-ended questions + a short effectiveness analysis."
         if IS_EN else
-        "أنشئ سؤالًا مفتوحًا يُحفّز نقاشًا طويلًا + تحليل قصير لماذا سينجح."
+        "أنشئ 3 أسئلة مفتوحة تُحفّز نقاشًا طويلًا + تحليل قصير لماذا ستنجح."
     ),
     "exp_title": "💡 What does this tool do?" if IS_EN else "💡 ما الذي تفعله هذه الأداة؟",
     "exp_body": (
-        "- Generates **one** open-ended question that cannot be answered with Yes/No.\n"
-        "- Then explains briefly **why** this question drives long comments.\n\n"
-        "**Tip:** Specific topics + clear goal = better question."
+        f"- Generates **{NUM_QUESTIONS}** open-ended questions that cannot be answered with Yes/No.\n"
+        "- Then explains briefly **why** they drive long comments.\n\n"
+        "**Tip:** Specific topic + clear goal = stronger questions."
         if IS_EN else
-        "- تُولّد **سؤال واحد** مفتوح لا يمكن الرد عليه بـ نعم/لا.\n"
-        "- ثم تشرح باختصار **لماذا** هذا السؤال سيجلب تعليقات طويلة.\n\n"
-        "**نصيحة:** موضوع محدد + هدف واضح = سؤال أقوى."
+        f"- تُولّد **{NUM_QUESTIONS}** أسئلة مفتوحة لا يمكن الرد عليها بـ نعم/لا.\n"
+        "- ثم تشرح باختصار **لماذا** هذه الأسئلة ستجلب تعليقات طويلة.\n\n"
+        "**نصيحة:** موضوع محدد + هدف واضح = أسئلة أقوى."
     ),
     "topic": "1) Topic / Context" if IS_EN else "1) الموضوع / سياق السؤال",
     "goal": "2) Goal / Response type" if IS_EN else "2) الهدف / نوع الرد المطلوب",
     "aud": "3) Target audience (optional)" if IS_EN else "3) الجمهور المستهدف (اختياري)",
-    "btn": "🔥 Generate question" if IS_EN else "🔥 توليد سؤال مفتوح",
+    "btn": "🔥 Generate questions" if IS_EN else "🔥 توليد أسئلة مفتوحة",
     "warn_empty": "Please fill Topic and Goal." if IS_EN else "رجاءً املأ الموضوع والهدف.",
     "spinner": "Generating..." if IS_EN else "جاري التوليد...",
-    "result_title": "💬 Suggested Question" if IS_EN else "💬 السؤال المقترح",
+    "result_title": "💬 Suggested Questions" if IS_EN else "💬 الأسئلة المقترحة",
     "analysis_title": "✨ Why it works" if IS_EN else "✨ لماذا سينجح؟",
     "fb_title": "📝 Feedback" if IS_EN else "📝 ساعدنا نطوّر الأداة",
     "fb_q": "How was your experience?" if IS_EN else "كيف كانت تجربتك؟",
@@ -95,7 +99,7 @@ TXT = {
     "wait": "Please wait a few seconds before trying again." if IS_EN else "استني شوي قبل المحاولة مرة ثانية.",
     "err_missing_secrets": "⚠️ Missing secrets in Secrets/Env." if IS_EN else "⚠️ مفاتيح الربط ناقصة في Secrets/Env.",
 
-    # NEW: Gate text
+    # Gate text
     "free_left": ("Free uses left: " if IS_EN else "المحاولات المجانية المتبقية: "),
     "beta_left": ("Beta uses left: " if IS_EN else "محاولات البيتا المتبقية: "),
     "gate_title": ("🔒 Unlock Beta Access" if IS_EN else "🔒 افتحي وصول البيتا"),
@@ -237,7 +241,7 @@ textarea, input {{
 
 
 # =========================================================
-# NEW: SESSION STATE + EMAIL HELPERS
+# SESSION STATE + EMAIL HELPERS
 # =========================================================
 if "free_uses_openq" not in st.session_state:
     st.session_state["free_uses_openq"] = 0
@@ -257,7 +261,6 @@ def redeem_beta(email: str) -> int:
     data = getattr(res, "data", None) or []
     if data and isinstance(data, list) and "remaining_uses" in data[0]:
         return int(data[0]["remaining_uses"])
-    # fallback
     return BETA_EMAIL_USES
 
 
@@ -297,7 +300,6 @@ def has_access_to_generate() -> bool:
 
     # Beta path
     if email:
-        # If we don't have remaining cached, fetch once
         if beta_remaining is None:
             try:
                 beta_remaining = redeem_beta(email)
@@ -333,7 +335,6 @@ def decrement_beta_use_if_any():
         remaining = consume_beta(email)
         st.session_state["beta_remaining_openq"] = remaining
     except Exception:
-        # if RPC fails, don't crash the app; just keep local state
         pass
 
 
@@ -367,9 +368,12 @@ def track_cta_event(app_id: str):
     except Exception:
         pass
 
+
 def make_hash(topic: str, goal: str, audience: str, lang: str) -> str:
-    payload = f"{topic.strip()}||{goal.strip()}||{(audience or '').strip()}||{lang}"
+    # include cache version so old cached "single-question" won't show here
+    payload = f"{CACHE_VERSION_TAG}||{topic.strip()}||{goal.strip()}||{(audience or '').strip()}||{lang}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
 
 def cache_get(app_id: str, content_hash: str):
     try:
@@ -390,6 +394,7 @@ def cache_get(app_id: str, content_hash: str):
         pass
     return None
 
+
 def cache_set(app_id: str, content_hash: str, payload: dict):
     try:
         supabase.table("viral_scores_cache").upsert(
@@ -403,6 +408,7 @@ def cache_set(app_id: str, content_hash: str, payload: dict):
         ).execute()
     except Exception:
         pass
+
 
 def can_call_model(min_seconds: int = 8) -> bool:
     now = time.time()
@@ -438,7 +444,7 @@ def save_feedback_via_rpc(
 
 
 # =========================================================
-# 7) MODEL CALL (Open Question)
+# 7) MODEL CALL (3 Open Questions)
 # =========================================================
 def _extract_json_block(t: str) -> str:
     if not t:
@@ -452,19 +458,58 @@ def _extract_json_block(t: str) -> str:
         return s[start:end + 1]
     return s
 
-def generate_open_question(topic: str, goal: str, audience: str, is_en: bool) -> dict:
+
+def _normalize_questions(obj: dict, is_en: bool) -> dict:
+    """Ensure output is always: {'Questions':[q1,q2,q3], 'EffectivenessAnalysis': '...'}"""
+    if not isinstance(obj, dict):
+        return {"error": "Bad response" if is_en else "استجابة غير صالحة"}
+
+    # Backward compatibility (if old shape appears)
+    if "GeneratedQuestion" in obj and "Questions" not in obj:
+        q = (obj.get("GeneratedQuestion") or "").strip()
+        obj = {
+            "Questions": [q] if q else [],
+            "EffectivenessAnalysis": obj.get("EffectivenessAnalysis", "") or ""
+        }
+
+    qs = obj.get("Questions")
+    if not isinstance(qs, list):
+        qs = []
+
+    # clean + keep non-empty
+    cleaned = []
+    for x in qs:
+        if isinstance(x, str):
+            t = x.strip()
+            if t:
+                cleaned.append(t)
+
+    # pad to NUM_QUESTIONS
+    while len(cleaned) < NUM_QUESTIONS:
+        cleaned.append("—")
+
+    cleaned = cleaned[:NUM_QUESTIONS]
+    obj["Questions"] = cleaned
+
+    if "EffectivenessAnalysis" not in obj or not isinstance(obj.get("EffectivenessAnalysis"), str):
+        obj["EffectivenessAnalysis"] = ""
+
+    return obj
+
+
+def generate_open_questions(topic: str, goal: str, audience: str, is_en: bool) -> dict:
     lang_name = "English" if is_en else "Arabic"
 
     system_prompt = (
         "You are a Conversation Catalyst for social media. "
-        "Generate ONE highly engaging open-ended question that compels long, detailed responses and opinions "
-        "and avoids simple Yes/No answers. "
+        f"Generate EXACTLY {NUM_QUESTIONS} highly engaging open-ended questions that compel long, detailed responses. "
+        "Each question must avoid simple Yes/No answers. "
         f"Return output in {lang_name}. "
         "Return ONLY valid JSON. No extra text."
     )
 
     prompt = f"""
-Generate ONE open-ended question + a short analysis explaining why it works.
+Generate EXACTLY {NUM_QUESTIONS} open-ended questions + a short analysis explaining why they work.
 
 Inputs:
 - Topic: {topic}
@@ -473,7 +518,7 @@ Inputs:
 
 Return ONLY JSON with EXACT keys:
 {{
-  "GeneratedQuestion": "string",
+  "Questions": ["string", "string", "string"],
   "EffectivenessAnalysis": "string"
 }}
 """
@@ -481,10 +526,13 @@ Return ONLY JSON with EXACT keys:
     response_schema = {
         "type": "OBJECT",
         "properties": {
-            "GeneratedQuestion": {"type": "STRING"},
+            "Questions": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"},
+            },
             "EffectivenessAnalysis": {"type": "STRING"},
         },
-        "propertyOrdering": ["GeneratedQuestion", "EffectivenessAnalysis"],
+        "propertyOrdering": ["Questions", "EffectivenessAnalysis"],
     }
 
     cfg = g_types.GenerateContentConfig(
@@ -492,7 +540,7 @@ Return ONLY JSON with EXACT keys:
         response_mime_type="application/json",
         response_schema=response_schema,
         temperature=0.5,
-        max_output_tokens=700,
+        max_output_tokens=850,
     )
 
     last_err = None
@@ -506,7 +554,11 @@ Return ONLY JSON with EXACT keys:
             raw = _extract_json_block(getattr(resp, "text", "") or "")
             if not raw:
                 return {"error": "Empty response" if is_en else "استجابة فارغة"}
-            return json.loads(raw)
+            obj = json.loads(raw)
+            obj = _normalize_questions(obj, is_en)
+            if "error" in obj:
+                return obj
+            return obj
 
         except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
             last_err = e
@@ -601,13 +653,15 @@ if st.button(TXT["btn"]):
     cached = cache_get(APP_ID, c_hash)
 
     success = False
-    if cached and isinstance(cached, dict) and "GeneratedQuestion" in cached:
-        st.session_state[f"{APP_ID}_result"] = cached
-        st.session_state[f"{APP_ID}_has_result"] = True
-        success = True
+    if cached and isinstance(cached, dict) and "Questions" in cached:
+        cached = _normalize_questions(cached, IS_EN)
+        if "error" not in cached:
+            st.session_state[f"{APP_ID}_result"] = cached
+            st.session_state[f"{APP_ID}_has_result"] = True
+            success = True
     else:
         with st.spinner(TXT["spinner"]):
-            res = generate_open_question(t, g, a, IS_EN)
+            res = generate_open_questions(t, g, a, IS_EN)
 
         if isinstance(res, dict) and "error" not in res:
             cache_set(APP_ID, c_hash, res)
@@ -630,15 +684,29 @@ if st.button(TXT["btn"]):
 # =========================================================
 data = st.session_state.get(f"{APP_ID}_result") if st.session_state.get(f"{APP_ID}_has_result") else None
 
-if isinstance(data, dict) and data and "GeneratedQuestion" in data:
+if isinstance(data, dict) and data and "Questions" in data:
+    qs = data.get("Questions") or []
+    if not isinstance(qs, list):
+        qs = []
+
     st.markdown("---")
+
+    # Build questions blocks
+    q_blocks = ""
+    for i, q in enumerate(qs[:NUM_QUESTIONS], start=1):
+        label = f"Option {i}" if IS_EN else f"خيار {i}"
+        q_blocks += f"""
+        <div class="result-title" style="margin-top:10px;">{label}</div>
+        <div class="result-block">{q}</div>
+        """
+
     st.markdown(
         f"""
 <div class="result-card">
   <div class="result-title">{TXT["result_title"]}</div>
-  <div class="result-block">{data.get("GeneratedQuestion","—")}</div>
+  {q_blocks}
 
-  <div class="result-title" style="margin-top:14px;">{TXT["analysis_title"]}</div>
+  <div class="result-title" style="margin-top:16px;">{TXT["analysis_title"]}</div>
   <div class="result-block">{data.get("EffectivenessAnalysis","—")}</div>
 </div>
 """,
