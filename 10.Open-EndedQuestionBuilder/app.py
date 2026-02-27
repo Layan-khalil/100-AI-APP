@@ -57,18 +57,88 @@ TXT = {
     "sub": (
         "Generate 3 discussion-triggering open-ended questions + a short effectiveness analysis."
         if IS_EN else
-        "أنشئ 3 أسئلة مفتوحة تُحفّز نقاشًا طويلًا + تحليل قصير لماذا ستنجح."
+        "أنشئ 3 أسئلة مفتوحة تُحفّز نقاشًا طويلًا + تحليل صادق لماذا ستنجح هذه الأسئلة مع جمهورك."
     ),
     "exp_title": "💡 What does this tool do?" if IS_EN else "💡 ما الذي تفعله هذه الأداة؟",
     "exp_body": (
-        f"- Generates **{NUM_QUESTIONS}** open-ended questions that cannot be answered with Yes/No.\n"
-        "- Then explains briefly **why** they drive long comments.\n\n"
-        "**Tip:** Specific topic + clear goal = stronger questions."
-        if IS_EN else
-        f"- تُولّد **{NUM_QUESTIONS}** أسئلة مفتوحة لا يمكن الرد عليها بـ نعم/لا.\n"
-        "- ثم تشرح باختصار **لماذا** هذه الأسئلة ستجلب تعليقات طويلة.\n\n"
-        "**نصيحة:** موضوع محدد + هدف واضح = أسئلة أقوى."
-    ),
+    f"""
+### What this tool really does
+
+This isn’t just a question generator.
+
+It builds **3 strategically different open-ended questions**:
+
+🔥 **Bold** — challenges opinions and creates tension  
+🔎 **Curious** — invites experiences and storytelling  
+🧠 **Deep** — triggers thoughtful, long-form responses  
+
+Each question is designed to:
+- Avoid Yes/No answers  
+- Encourage personal insight  
+- Spark disagreement (in a healthy way)  
+- Increase comment depth and quality  
+
+---
+
+### Why this matters
+
+Engagement isn’t about asking questions.
+It’s about asking questions people *feel compelled* to answer.
+
+The right framing can:
+- Turn passive readers into active commenters  
+- Double the average comment length  
+- Attract higher-quality audience interaction  
+
+---
+
+### Best results when:
+
+✔ Topic is specific  
+✔ Goal is clear (opinions? stories? debate?)  
+✔ Audience is defined  
+
+"""
+    if IS_EN else
+    f"""
+### ماذا تفعل هذه الأداة فعليًا؟
+
+هذه ليست مجرد أداة لتوليد أسئلة.
+
+هي تبني **3 أسئلة مفتوحة بأساليب مختلفة استراتيجيًا**:
+
+🔥 **سؤال جريء** — يتحدى الآراء ويخلق توترًا إيجابيًا  
+🔎 **سؤال فضولي** — يدعو الناس لمشاركة تجاربهم  
+🧠 **سؤال عميق** — يحفّز تفكيرًا طويلًا وتحليلًا أعمق  
+
+كل سؤال مصمم بهدف:
+- يتجنب إجابة نعم/لا  
+- يدفع الناس للكلام عن أنفسهم  
+- يفتح باب اختلاف محترم في الآراء  
+- يزيد عمق وجودة التعليقات  
+
+---
+
+### لماذا هذا مهم؟
+
+التفاعل لا يأتي من السؤال…
+بل من طريقة صياغته.
+
+السؤال الصحيح يمكن أن:
+- يحوّل القارئ الصامت إلى معلّق نشط  
+- يضاعف طول التعليقات  
+- يجذب جمهورًا أكثر جودة  
+
+---
+
+### أفضل نتيجة تحصل عليها عندما:
+
+✔ يكون الموضوع محددًا  
+✔ الهدف واضح (نقاش؟ تجارب؟ جدل؟)  
+✔ الجمهور معروف  
+
+"""
+),
     "topic": "1) Topic / Context" if IS_EN else "1) الموضوع / سياق السؤال",
     "goal": "2) Goal / Response type" if IS_EN else "2) الهدف / نوع الرد المطلوب",
     "aud": "3) Target audience (optional)" if IS_EN else "3) الجمهور المستهدف (اختياري)",
@@ -677,6 +747,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
 
 
 
