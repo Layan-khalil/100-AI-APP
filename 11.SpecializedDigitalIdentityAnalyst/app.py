@@ -181,9 +181,9 @@ def get_model():
 # 5) MODEL CALL
 # =========================================================
 
-def analyze_identity(identity,goal,samples,image_part):
+def analyze_identity(identity, goal, samples, image_part):
 
-    prompt=f"""
+    prompt = f"""
 Analyze digital identity.
 
 Identity:
@@ -192,7 +192,7 @@ Identity:
 Goal:
 {goal}
 
-Content:
+Content samples:
 {samples}
 
 Return JSON:
@@ -202,52 +202,85 @@ ObservedIdentitySummary
 StrategicAdjustments
 """
 
-    schema={
-    "type":"OBJECT",
-    "properties":{
+    schema = {
+        "type": "OBJECT",
+        "properties": {
 
-    "ConsistencyMatrix":{
-    "type":"OBJECT",
-    "properties":{
-    "Textual_Identity_Score":{"type":"STRING"},
-    "Textual_Goal_Score":{"type":"STRING"},
-    "Visual_Identity_Score":{"type":"STRING"},
-    "Visual_Goal_Score":{"type":"STRING"}
+            "ConsistencyMatrix": {
+                "type": "OBJECT",
+                "properties": {
+                    "Textual_Identity_Score": {"type": "STRING"},
+                    "Textual_Goal_Score": {"type": "STRING"},
+                    "Visual_Identity_Score": {"type": "STRING"},
+                    "Visual_Goal_Score": {"type": "STRING"}
+                }
+            },
+
+            "ObservedIdentitySummary": {"type": "STRING"},
+            "StrategicAdjustments": {"type": "STRING"}
+        }
     }
-    },
 
-    "ObservedIdentitySummary":{"type":"STRING"},
-    "StrategicAdjustments":{"type":"STRING"}
-    }
-
-    }
-
-    config=g_types.GenerateContentConfig(
-    system_instruction="You are digital identity strategist",
-    response_mime_type="application/json",
-    response_schema=schema
+    config = g_types.GenerateContentConfig(
+        system_instruction="You are a digital identity strategist",
+        response_mime_type="application/json",
+        response_schema=schema,
+        temperature=0.4,
+        max_output_tokens=900
     )
 
-    contents=[image_part,g_types.Part(text=prompt)]
+    contents = [image_part, g_types.Part(text=prompt)]
+
+    last_error = None
 
     for attempt in range(MAX_RETRIES):
 
         try:
 
-            resp=genai_client.models.generate_content(
-            model=get_model(),
-            contents=contents,
-            config=config
+            response = genai_client.models.generate_content(
+                model=get_model(),
+                contents=contents,
+                config=config
             )
 
-            return json.loads(resp.text)
+            raw = getattr(response, "text", "")
 
-        except (ResourceExhausted,ServiceUnavailable,DeadlineExceeded):
+            if not raw:
+                return {"error": "Empty response from model"}
 
-            time.sleep(INITIAL_DELAY*(attempt+1))
+            raw = raw.strip()
 
-    return {"error":"Model failed"}
+            # Remove markdown JSON
+            if raw.startswith("```"):
+                raw = raw.replace("```json", "").replace("```", "").strip()
 
+            try:
+
+                data = json.loads(raw)
+
+                if not isinstance(data, dict):
+                    return {"error": "Model returned non-dictionary JSON"}
+
+                return data
+
+            except json.JSONDecodeError:
+
+                return {
+                    "error": "Model returned invalid JSON",
+                    "raw_response": raw[:500]
+                }
+
+        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
+
+            last_error = str(e)
+
+            time.sleep(INITIAL_DELAY * (attempt + 1))
+
+        except Exception as e:
+
+            return {"error": str(e)}
+
+    return {"error": last_error or "Model failed"}
 
 # =========================================================
 # 6) UI
