@@ -45,8 +45,10 @@ if "ui_lang" not in st.session_state:
 
 lang_toggle = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
 st.session_state["ui_lang"] = "EN" if lang_toggle else "AR"
-
 IS_EN = (st.session_state["ui_lang"] == "EN")
+
+DIR = "ltr" if IS_EN else "rtl"
+ALIGN = "left" if IS_EN else "right"
 
 TXT = {
 "title":"Digital Identity Analyzer" if IS_EN else "محلل الهوية الرقمية",
@@ -313,7 +315,7 @@ if st.button(TXT["btn"]):
         st.markdown(f"### {TXT['strategy']}")
 
         st.write(result["StrategicAdjustments"])
-
+        
 
 # =========================================================
 # 8) FOOTER
