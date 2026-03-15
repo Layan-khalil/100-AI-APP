@@ -1,156 +1,180 @@
 import streamlit as st
-from google import genai
-from google.genai import types as g_types
+import os
 import json
 import time
+import hashlib
+from datetime import datetime, timezone
+
+from supabase import create_client, Client
+from postgrest.exceptions import APIError
+
+from google import genai
+from google.genai import types as g_types
 from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
 
+
 # =========================================================
-# Page Setup
+# 0) PAGE CONFIG
 # =========================================================
 
 st.set_page_config(
     page_title="Digital Identity Analyzer",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
+APP_ID = "11-digital-identity-analyzer"
+
+MODEL_CANDIDATES = [
+    "gemini-2.0-flash-001",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro-001",
+]
+
+MAX_RETRIES = 4
+INITIAL_DELAY = 3
+CACHE_VERSION_TAG = "identity_v1"
+
+
 # =========================================================
-# RTL + Styling
+# 1) LANGUAGE SWITCH
 # =========================================================
 
-st.markdown("""
-<style>
+if "ui_lang" not in st.session_state:
+    st.session_state["ui_lang"] = "AR"
 
-html, body, .stApp {
-direction: rtl;
-text-align: right;
+lang_toggle = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
+st.session_state["ui_lang"] = "EN" if lang_toggle else "AR"
+
+IS_EN = (st.session_state["ui_lang"] == "EN")
+
+TXT = {
+"title":"Digital Identity Analyzer" if IS_EN else "محلل الهوية الرقمية",
+"sub":(
+"Analyze the consistency between your content, visual branding and declared identity."
+if IS_EN else
+"تحليل التناسق بين محتواك وهويتك المعلنة والهوية البصرية."
+),
+"identity":"Your declared identity" if IS_EN else "هويتك المعلنة",
+"goal":"Your content goal" if IS_EN else "هدف المحتوى",
+"samples":"Content samples" if IS_EN else "عينات المحتوى",
+"upload":"Upload profile screenshot" if IS_EN else "ارفع لقطة شاشة للحساب",
+"btn":"Analyze identity" if IS_EN else "تحليل الهوية",
+"result":"Analysis Result" if IS_EN else "نتيجة التحليل",
+"matrix":"Consistency Matrix" if IS_EN else "مصفوفة التناسق",
+"summary":"Observed Identity" if IS_EN else "الهوية الفعلية",
+"strategy":"Strategic Adjustments" if IS_EN else "التعديلات الاستراتيجية",
+"warn":"Fill all required fields" if IS_EN else "يرجى تعبئة كل الحقول",
+"spinner":"Analyzing..." if IS_EN else "جاري التحليل",
 }
 
-.result-card{
-background:#f0f9ff;
-padding:25px;
-border-radius:10px;
-border-right:6px solid #0ea5e9;
-margin-top:20px;
-}
-
-.score-high{background:#10b981;color:white;padding:5px 12px;border-radius:6px}
-.score-medium{background:#f59e0b;color:white;padding:5px 12px;border-radius:6px}
-.score-low{background:#ef4444;color:white;padding:5px 12px;border-radius:6px}
-
-</style>
-""", unsafe_allow_html=True)
-
 # =========================================================
-# Language Switch
+# 2) SECRETS / CLIENTS
 # =========================================================
 
-lang = st.radio(
-"Language / اللغة",
-["العربية","English"],
-horizontal=True
-)
+def get_secret(key: str):
+    return st.secrets.get(key) or os.environ.get(key)
 
-TEXT = {
-"العربية":{
-"title":"🔬 محلل الهوية الرقمية",
-"analyze":"🚀 بدء التحليل",
-"identity":"هويتك / تخصصك",
-"goal":"هدف المحتوى",
-"samples":"عينات المحتوى",
-"upload":"رفع لقطة شاشة",
-"instructions":"💡 التعليمات"
-},
-"English":{
-"title":"🔬 Digital Identity Analyzer",
-"analyze":"🚀 Analyze",
-"identity":"Your Identity",
-"goal":"Content Goal",
-"samples":"Content Samples",
-"upload":"Upload Screenshot",
-"instructions":"💡 Instructions"
-}
-}
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
+GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY") or get_secret("GEMINI_API_KEY")
 
-T = TEXT[lang]
+if not all([SUPABASE_URL, SUPABASE_KEY, GOOGLE_API_KEY]):
+    st.error("Missing secrets")
+    st.stop()
 
-st.title(T["title"])
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+genai_client = genai.Client(api_key=GOOGLE_API_KEY)
+
 
 # =========================================================
-# Instructions Expander
+# 3) CACHE
 # =========================================================
 
-with st.expander(T["instructions"]):
+def make_hash(identity,goal,samples):
 
-    st.markdown("""
-Example structured input:
+    payload=f"{CACHE_VERSION_TAG}||{identity}||{goal}||{samples}"
 
---- Post 1 ---
-Type: Reel  
-Engagement: High  
-Text: Blockchain will reshape finance...
+    return hashlib.sha256(payload.encode()).hexdigest()
 
---- Post 2 ---
-Type: Carousel  
-Engagement: Medium  
-Text: 5 lessons about startup growth...
-""")
 
-# =========================================================
-# Inputs
-# =========================================================
+def cache_get(hash_id):
 
-samples = st.text_area(T["samples"], height=200)
+    try:
 
-col1,col2 = st.columns(2)
+        res=supabase.table("viral_scores_cache")\
+        .select("analysis_text")\
+        .eq("app_id",APP_ID)\
+        .eq("content_hash",hash_id)\
+        .limit(1).execute()
 
-with col1:
-    identity = st.text_area(T["identity"], height=120)
+        data=res.data or []
 
-with col2:
-    goal = st.text_area(T["goal"], height=120)
+        if data:
+            txt=data[0]["analysis_text"]
 
-image = st.file_uploader(
-T["upload"],
-type=["png","jpg","jpeg"]
-)
+            return json.loads(txt)
 
-# =========================================================
-# Gemini Client
-# =========================================================
+    except:
 
-client=None
+        pass
 
-try:
-    API_KEY=st.secrets.get("GEMINI_API_KEY","")
-    if API_KEY:
-        client=genai.Client(api_key=API_KEY)
-except:
-    pass
+    return None
 
-# =========================================================
-# Image helper
-# =========================================================
 
-def image_part(file):
-    if file:
-        return g_types.Part.from_bytes(
-            data=file.getvalue(),
-            mime_type=file.type
-        )
+def cache_set(hash_id,payload):
+
+    try:
+
+        supabase.table("viral_scores_cache").upsert({
+
+        "app_id":APP_ID,
+        "content_hash":hash_id,
+        "analysis_text":json.dumps(payload),
+        "created_at":datetime.now(timezone.utc).isoformat()
+
+        },on_conflict="app_id,content_hash").execute()
+
+    except:
+
+        pass
+
 
 # =========================================================
-# Model Analysis
+# 4) MODEL PICKER
 # =========================================================
 
-def analyze(image,identity,goal,samples):
+def get_model():
 
-    if not client:
-        return {"error":"API Key missing"}
+    if "model_identity" in st.session_state:
+
+        return st.session_state["model_identity"]
+
+    for m in MODEL_CANDIDATES:
+
+        try:
+
+            genai_client.models.generate_content(model=m,contents="ping")
+
+            st.session_state["model_identity"]=m
+
+            return m
+
+        except:
+
+            continue
+
+    return MODEL_CANDIDATES[0]
+
+
+# =========================================================
+# 5) MODEL CALL
+# =========================================================
+
+def analyze_identity(identity,goal,samples,image_part):
 
     prompt=f"""
-
-Analyze the digital identity.
+Analyze digital identity.
 
 Identity:
 {identity}
@@ -158,7 +182,7 @@ Identity:
 Goal:
 {goal}
 
-Content samples:
+Content:
 {samples}
 
 Return JSON:
@@ -166,91 +190,140 @@ Return JSON:
 ConsistencyMatrix
 ObservedIdentitySummary
 StrategicAdjustments
-
-Scores must be:
-عالي
-متوسط
-منخفض
 """
 
-    contents=[image,g_types.Part(text=prompt)]
+    schema={
+    "type":"OBJECT",
+    "properties":{
 
-    response=client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=contents
+    "ConsistencyMatrix":{
+    "type":"OBJECT",
+    "properties":{
+    "Textual_Identity_Score":{"type":"STRING"},
+    "Textual_Goal_Score":{"type":"STRING"},
+    "Visual_Identity_Score":{"type":"STRING"},
+    "Visual_Goal_Score":{"type":"STRING"}
+    }
+    },
+
+    "ObservedIdentitySummary":{"type":"STRING"},
+    "StrategicAdjustments":{"type":"STRING"}
+    }
+
+    }
+
+    config=g_types.GenerateContentConfig(
+    system_instruction="You are digital identity strategist",
+    response_mime_type="application/json",
+    response_schema=schema
     )
 
-    txt=response.text.strip()
+    contents=[image_part,g_types.Part(text=prompt)]
 
-    try:
-        return json.loads(txt)
-    except:
-        return {"error":txt}
+    for attempt in range(MAX_RETRIES):
+
+        try:
+
+            resp=genai_client.models.generate_content(
+            model=get_model(),
+            contents=contents,
+            config=config
+            )
+
+            return json.loads(resp.text)
+
+        except (ResourceExhausted,ServiceUnavailable,DeadlineExceeded):
+
+            time.sleep(INITIAL_DELAY*(attempt+1))
+
+    return {"error":"Model failed"}
+
 
 # =========================================================
-# Run Analysis
+# 6) UI
 # =========================================================
 
-if st.button(T["analyze"]):
+st.title(TXT["title"])
+st.caption(TXT["sub"])
 
-    if not samples or not identity or not goal or not image:
-        st.warning("Please fill all fields")
+samples=st.text_area(TXT["samples"],height=180)
+
+col1,col2=st.columns(2)
+
+with col1:
+
+    identity=st.text_area(TXT["identity"],height=120)
+
+with col2:
+
+    goal=st.text_area(TXT["goal"],height=120)
+
+image=st.file_uploader(TXT["upload"],type=["png","jpg","jpeg"])
+
+
+# =========================================================
+# 7) BUTTON
+# =========================================================
+
+if st.button(TXT["btn"]):
+
+    if not identity or not goal or not samples or not image:
+
+        st.warning(TXT["warn"])
+
         st.stop()
 
-    img=image_part(image)
+    hash_id=make_hash(identity,goal,samples)
 
-    with st.spinner("Analyzing..."):
-        result=analyze(img,identity,goal,samples)
+    cached=cache_get(hash_id)
+
+    if cached:
+
+        result=cached
+
+    else:
+
+        img=g_types.Part.from_bytes(
+        data=image.getvalue(),
+        mime_type=image.type
+        )
+
+        with st.spinner(TXT["spinner"]):
+
+            result=analyze_identity(identity,goal,samples,img)
+
+        cache_set(hash_id,result)
 
     if "error" in result:
+
         st.error(result["error"])
 
     else:
 
         matrix=result["ConsistencyMatrix"]
 
-        def score(s):
-            if s=="عالي":
-                return f'<span class="score-high">{s}</span>'
-            if s=="متوسط":
-                return f'<span class="score-medium">{s}</span>'
-            return f'<span class="score-low">{s}</span>'
+        st.markdown(f"### {TXT['matrix']}")
 
-        st.markdown("## 📊 Consistency Matrix")
+        st.json(matrix)
 
-        st.markdown(f"""
-<div class="result-card">
-
-Text vs Identity: {score(matrix["Textual_Identity_Score"])}
-
-Text vs Goal: {score(matrix["Textual_Goal_Score"])}
-
-Visual vs Identity: {score(matrix["Visual_Identity_Score"])}
-
-Visual vs Goal: {score(matrix["Visual_Goal_Score"])}
-
-</div>
-""",unsafe_allow_html=True)
-
-        st.markdown("## 🧠 Identity Summary")
+        st.markdown(f"### {TXT['summary']}")
 
         st.write(result["ObservedIdentitySummary"])
 
-        st.markdown("## 🚀 Strategic Adjustments")
+        st.markdown(f"### {TXT['strategy']}")
 
         st.write(result["StrategicAdjustments"])
 
+
 # =========================================================
-# Feedback
+# 8) FOOTER
 # =========================================================
 
-st.markdown("---")
-
-st.subheader("Feedback")
-
-rating=st.slider("Rate this tool",1,5)
-
-feedback=st.text_area("Your feedback")
-
-if st.button("Submit Feedback"):
-    st.success("Thank you for your feedback!")
+st.markdown(
+"""
+<div style="text-align:center;margin-top:40px;font-size:12px;">
+© 2026 AI Product Builder - Layan Khalil
+</div>
+""",
+unsafe_allow_html=True
+)
