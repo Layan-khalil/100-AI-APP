@@ -45,10 +45,9 @@ if "ui_lang" not in st.session_state:
 
 lang_toggle = st.toggle("English", value=(st.session_state["ui_lang"] == "EN"))
 st.session_state["ui_lang"] = "EN" if lang_toggle else "AR"
+
 IS_EN = (st.session_state["ui_lang"] == "EN")
 
-DIR = "ltr" if IS_EN else "rtl"
-ALIGN = "left" if IS_EN else "right"
 
 TXT = {
 "title":"Digital Identity Analyzer" if IS_EN else "محلل الهوية الرقمية",
@@ -68,13 +67,27 @@ if IS_EN else
 "strategy":"Strategic Adjustments" if IS_EN else "التعديلات الاستراتيجية",
 "warn":"Fill all required fields" if IS_EN else "يرجى تعبئة كل الحقول",
 "spinner":"Analyzing..." if IS_EN else "جاري التحليل",
+
+"fb_title":"Feedback" if IS_EN else "الفيدباك",
+"fb_q":"How was your experience?" if IS_EN else "كيف كانت تجربتك؟",
+"fb_yes":"Useful tool" if IS_EN else "الأداة مفيدة",
+"fb_no":"Not useful" if IS_EN else "الأداة غير مفيدة",
+"fb_missing":"What was missing?" if IS_EN else "ما الذي كان ناقصاً؟",
+"fb_exp":"Quick feedback" if IS_EN else "فيدباك سريع",
+"fb_p1":"What problem were you trying to solve?" if IS_EN else "ما المشكلة التي حاولت حلها؟",
+"fb_p2":"Did it help? Why?" if IS_EN else "هل ساعدتك؟ لماذا؟",
+"fb_p3":"What would make this tool essential?" if IS_EN else "ما الذي سيجعل هذه الأداة ضرورية؟",
+"fb_btn":"Submit feedback" if IS_EN else "إرسال الفيدباك",
+"fb_warn":"Write at least one line." if IS_EN else "اكتب سطر واحد على الأقل",
+"fb_ok":"Feedback saved" if IS_EN else "تم حفظ الفيدباك"
 }
 
+
 # =========================================================
-# 2) SECRETS / CLIENTS
+# 2) SECRETS
 # =========================================================
 
-def get_secret(key: str):
+def get_secret(key):
     return st.secrets.get(key) or os.environ.get(key)
 
 SUPABASE_URL = get_secret("SUPABASE_URL")
@@ -114,11 +127,9 @@ def cache_get(hash_id):
 
         if data:
             txt=data[0]["analysis_text"]
-
             return json.loads(txt)
 
     except:
-
         pass
 
     return None
@@ -138,7 +149,6 @@ def cache_set(hash_id,payload):
         },on_conflict="app_id,content_hash").execute()
 
     except:
-
         pass
 
 
@@ -149,7 +159,6 @@ def cache_set(hash_id,payload):
 def get_model():
 
     if "model_identity" in st.session_state:
-
         return st.session_state["model_identity"]
 
     for m in MODEL_CANDIDATES:
@@ -163,7 +172,6 @@ def get_model():
             return m
 
         except:
-
             continue
 
     return MODEL_CANDIDATES[0]
@@ -248,16 +256,14 @@ StrategicAdjustments
 st.title(TXT["title"])
 st.caption(TXT["sub"])
 
-samples=st.text_area(TXT["samples"],height=180)
+samples=st.text_area(TXT["samples"],height=200)
 
 col1,col2=st.columns(2)
 
 with col1:
-
     identity=st.text_area(TXT["identity"],height=120)
 
 with col2:
-
     goal=st.text_area(TXT["goal"],height=120)
 
 image=st.file_uploader(TXT["upload"],type=["png","jpg","jpeg"])
@@ -315,10 +321,100 @@ if st.button(TXT["btn"]):
         st.markdown(f"### {TXT['strategy']}")
 
         st.write(result["StrategicAdjustments"])
-        
+
 
 # =========================================================
-# 8) FOOTER
+# 8) FEEDBACK (UPDATED)
+# =========================================================
+
+st.divider()
+
+st.subheader(TXT["fb_title"])
+
+feedback_choice = st.radio(
+    TXT["fb_q"],
+    (TXT["fb_yes"], TXT["fb_no"]),
+    key=f"{APP_ID}_feedback_choice",
+)
+
+useful = (feedback_choice == TXT["fb_yes"])
+
+missing_reason = None
+if not useful:
+    missing_reason = st.text_input(
+        TXT["fb_missing"],
+        max_chars=200,
+        key=f"{APP_ID}_missing_reason",
+    )
+
+with st.expander(TXT["fb_exp"], expanded=False):
+
+    problem_text = st.text_area(
+        TXT["fb_p1"],
+        max_chars=280,
+        key=f"{APP_ID}_problem_text"
+    )
+
+    helpful_reason = st.text_area(
+        TXT["fb_p2"],
+        max_chars=280,
+        key=f"{APP_ID}_helpful_reason"
+    )
+
+    must_use_text = st.text_area(
+        TXT["fb_p3"],
+        max_chars=280,
+        key=f"{APP_ID}_must_use_text"
+    )
+
+    submit_feedback = st.button(
+        TXT["fb_btn"],
+        key=f"{APP_ID}_submit_feedback"
+    )
+
+    if submit_feedback:
+
+        has_any_text = any(
+            [
+                (missing_reason or "").strip(),
+                (problem_text or "").strip(),
+                (helpful_reason or "").strip(),
+                (must_use_text or "").strip(),
+            ]
+        )
+
+        if (not useful) and (not has_any_text):
+            st.warning(TXT["fb_warn"])
+
+        else:
+            try:
+
+                supabase.rpc(
+                    "submit_app_feedback",
+                    {
+                        "p_app_name": APP_ID,
+                        "p_useful": useful,
+                        "p_missing_reason": (missing_reason or "").strip() or None,
+                        "p_problem_text": (problem_text or "").strip() or None,
+                        "p_helpful_reason": (helpful_reason or "").strip() or None,
+                        "p_must_use_text": (must_use_text or "").strip() or None,
+                    },
+                ).execute()
+
+                st.success(TXT["fb_ok"])
+
+            except APIError as e:
+                try:
+                    st.json(e.args[0])
+                except:
+                    st.write(str(e))
+
+            except Exception as e:
+                st.exception(e)
+
+
+# =========================================================
+# 9) FOOTER
 # =========================================================
 
 st.markdown(
