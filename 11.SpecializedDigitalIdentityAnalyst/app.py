@@ -3,10 +3,17 @@ import os
 import json
 import time
 import hashlib
+import re
 from datetime import datetime, timezone
 
-from supabase import create_client, Client
-from postgrest.exceptions import APIError
+# محاولة استيراد supabase بشكل آمن
+try:
+    from supabase import create_client, Client
+    from postgrest.exceptions import APIError
+except ImportError:
+    create_client = None
+    Client = None
+    APIError = Exception
 
 from google import genai
 from google.genai import types as g_types
@@ -26,18 +33,18 @@ st.set_page_config(
 APP_ID = "11-digital-identity-analyzer"
 
 MODEL_CANDIDATES = [
-    "gemini-2.0-flash-001",
-    "gemini-1.5-flash-001",
-    "gemini-1.5-pro-001",
+    "gemini-2.0-flash-exp",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
 ]
 
 MAX_RETRIES = 4
 INITIAL_DELAY = 3
-CACHE_VERSION_TAG = "identity_v1"
+CACHE_VERSION_TAG = "identity_v3"
 
 
 # =========================================================
-# 1) LANGUAGE SWITCH
+# 1) LANGUAGE SWITCH & GLOBAL RTL FIX
 # =========================================================
 
 if "ui_lang" not in st.session_state:
@@ -48,43 +55,82 @@ st.session_state["ui_lang"] = "EN" if lang_toggle else "AR"
 
 IS_EN = (st.session_state["ui_lang"] == "EN")
 
+DIR = "ltr" if IS_EN else "rtl"
+ALIGN = "left" if IS_EN else "right"
+
+# كود CSS مكثف لفرض اتجاه اليمين لليسار ومنع انقلاب الكلمات العربية
+st.markdown(f"""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
+
+    html, body, [data-testid="stAppViewContainer"], .main {{
+        direction: {DIR} !important;
+        text-align: {ALIGN} !important;
+        font-family: 'Cairo', sans-serif !important;
+    }}
+
+    [data-testid="stMarkdownContainer"] p, 
+    [data-testid="stMarkdownContainer"] h1, 
+    [data-testid="stMarkdownContainer"] h2, 
+    [data-testid="stMarkdownContainer"] h3 {{
+        direction: {DIR} !important;
+        text-align: {ALIGN} !important;
+        unicode-bidi: plaintext !important;
+    }}
+
+    /* إصلاح حقول الإدخال لتكون RTL */
+    .stTextArea textarea, .stTextInput input {{
+        direction: {DIR} !important;
+        text-align: {ALIGN} !important;
+    }}
+    
+    /* منع الـ JSON من الانقلاب (يجب أن يبقى LTR) */
+    code, pre {{
+        direction: ltr !important;
+        text-align: left !important;
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# 2) FIXED ARABIC TEXTS (داخل متغير TXT)
+# =========================================================
 
 TXT = {
-"title":"Digital Identity Analyzer" if IS_EN else "محلل الهوية الرقمية",
-"sub":(
-"Analyze the consistency between your content, visual branding and declared identity."
-if IS_EN else
-"تحليل التناسق بين محتواك وهويتك المعلنة والهوية البصرية."
-),
-"identity":"Your declared identity" if IS_EN else "هويتك المعلنة",
-"goal":"Your content goal" if IS_EN else "هدف المحتوى",
-"samples":"Content samples" if IS_EN else "عينات المحتوى",
-"upload":"Upload profile screenshot" if IS_EN else "ارفع لقطة شاشة للحساب",
-"btn":"Analyze identity" if IS_EN else "تحليل الهوية",
-"result":"Analysis Result" if IS_EN else "نتيجة التحليل",
-"matrix":"Consistency Matrix" if IS_EN else "مصفوفة التناسق",
-"summary":"Observed Identity" if IS_EN else "الهوية الفعلية",
-"strategy":"Strategic Adjustments" if IS_EN else "التعديلات الاستراتيجية",
-"warn":"Fill all required fields" if IS_EN else "يرجى تعبئة كل الحقول",
-"spinner":"Analyzing..." if IS_EN else "جاري التحليل",
+    "title": "Digital Identity Analyzer" if IS_EN else "محلل الهوية الرقمية",
+    "sub": (
+        "Analyze consistency between your content and declared identity."
+        if IS_EN else "حلل التناسق بين محتواك وهويتك المعلنة والهوية البصرية."
+    ),
+    "identity": "Your declared identity" if IS_EN else "هويتك المعلنة",
+    "goal": "Your content goal" if IS_EN else "هدف المحتوى",
+    "samples": "Content samples" if IS_EN else "عينات المحتوى",
+    "upload": "Upload profile screenshot" if IS_EN else "ارفع لقطة شاشة للحساب",
+    "btn": "Analyze identity" if IS_EN else "تحليل الهوية",
+    "result": "Analysis Result" if IS_EN else "نتيجة التحليل",
+    "matrix": "Consistency Matrix" if IS_EN else "مصفوفة التناسق",
+    "summary": "Observed Identity" if IS_EN else "الهوية الفعلية الملاحظة",
+    "strategy": "Strategic Adjustments" if IS_EN else "التعديلات الاستراتيجية المقترحة",
+    "warn": "Fill all required fields" if IS_EN else "يرجى تعبئة جميع الحقول المطلوبة",
+    "spinner": "Analyzing..." if IS_EN else "جاري التحليل، يرجى الانتظار...",
 
-"fb_title":"Feedback" if IS_EN else "الفيدباك",
-"fb_q":"How was your experience?" if IS_EN else "كيف كانت تجربتك؟",
-"fb_yes":"Useful tool" if IS_EN else "الأداة مفيدة",
-"fb_no":"Not useful" if IS_EN else "الأداة غير مفيدة",
-"fb_missing":"What was missing?" if IS_EN else "ما الذي كان ناقصاً؟",
-"fb_exp":"Quick feedback" if IS_EN else "فيدباك سريع",
-"fb_p1":"What problem were you trying to solve?" if IS_EN else "ما المشكلة التي حاولت حلها؟",
-"fb_p2":"Did it help? Why?" if IS_EN else "هل ساعدتك؟ لماذا؟",
-"fb_p3":"What would make this tool essential?" if IS_EN else "ما الذي سيجعل هذه الأداة ضرورية؟",
-"fb_btn":"Submit feedback" if IS_EN else "إرسال الفيدباك",
-"fb_warn":"Write at least one line." if IS_EN else "اكتب سطر واحد على الأقل",
-"fb_ok":"Feedback saved" if IS_EN else "تم حفظ الفيدباك"
+    "fb_title": "Feedback" if IS_EN else "رأيك يهمنا",
+    "fb_q": "How was your experience?" if IS_EN else "كيف كانت تجربتك مع الأداة؟",
+    "fb_yes": "Useful tool" if IS_EN else "الأداة مفيدة جداً",
+    "fb_no": "Not useful" if IS_EN else "الأداة غير مفيدة",
+    "fb_missing": "What was missing?" if IS_EN else "ما الذي كان ينقص الأداة؟",
+    "fb_exp": "Quick feedback" if IS_EN else "تقديم فيدباك سريع",
+    "fb_p1": "What problem were you solving?" if IS_EN else "ما المشكلة التي حاولت حلها؟",
+    "fb_p2": "Did it help? Why?" if IS_EN else "هل ساعدتك الأداة؟ ولماذا؟",
+    "fb_p3": "What would make it essential?" if IS_EN else "ما الذي يجعل هذه الأداة ضرورية لك؟",
+    "fb_btn": "Submit feedback" if IS_EN else "إرسال التقييم",
+    "fb_warn": "Write at least one line." if IS_EN else "يرجى كتابة سطر واحد على الأقل.",
+    "fb_ok": "Feedback saved" if IS_EN else "تم حفظ رأيك بنجاح، شكراً لك!"
 }
 
 
 # =========================================================
-# 2) SECRETS
+# 3) SECRETS & SETUP
 # =========================================================
 
 def get_secret(key):
@@ -95,366 +141,110 @@ SUPABASE_KEY = get_secret("SUPABASE_KEY")
 GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY") or get_secret("GEMINI_API_KEY")
 
 if not all([SUPABASE_URL, SUPABASE_KEY, GOOGLE_API_KEY]):
-    st.error("Missing secrets")
+    st.error("Missing Secrets!")
     st.stop()
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if create_client else None
 genai_client = genai.Client(api_key=GOOGLE_API_KEY)
 
 
 # =========================================================
-# 3) CACHE
+# 4) CACHE & LOGIC
 # =========================================================
 
-def make_hash(identity,goal,samples):
-
-    payload=f"{CACHE_VERSION_TAG}||{identity}||{goal}||{samples}"
-
+def make_hash(identity, goal, samples):
+    payload = f"{CACHE_VERSION_TAG}||{identity}||{goal}||{samples}"
     return hashlib.sha256(payload.encode()).hexdigest()
 
-
 def cache_get(hash_id):
-
+    if not supabase: return None
     try:
-
-        res=supabase.table("viral_scores_cache")\
-        .select("analysis_text")\
-        .eq("app_id",APP_ID)\
-        .eq("content_hash",hash_id)\
-        .limit(1).execute()
-
-        data=res.data or []
-
-        if data:
-            txt=data[0]["analysis_text"]
-            return json.loads(txt)
-
-    except:
-        pass
-
+        res = supabase.table("viral_scores_cache").select("analysis_text").eq("app_id", APP_ID).eq("content_hash", hash_id).limit(1).execute()
+        if res.data: return json.loads(res.data[0]["analysis_text"])
+    except: pass
     return None
 
-
-def cache_set(hash_id,payload):
-
+def cache_set(hash_id, payload):
+    if not supabase or not payload or "error" in payload: return
     try:
-
         supabase.table("viral_scores_cache").upsert({
-
-        "app_id":APP_ID,
-        "content_hash":hash_id,
-        "analysis_text":json.dumps(payload),
-        "created_at":datetime.now(timezone.utc).isoformat()
-
-        },on_conflict="app_id,content_hash").execute()
-
-    except:
-        pass
-
-
-# =========================================================
-# 4) MODEL PICKER
-# =========================================================
+            "app_id": APP_ID, "content_hash": hash_id, "analysis_text": json.dumps(payload), "created_at": datetime.now(timezone.utc).isoformat()
+        }, on_conflict="app_id,content_hash").execute()
+    except: pass
 
 def get_model():
-
-    if "model_identity" in st.session_state:
-        return st.session_state["model_identity"]
-
+    if "model_identity" in st.session_state: return st.session_state["model_identity"]
     for m in MODEL_CANDIDATES:
-
         try:
-
-            genai_client.models.generate_content(model=m,contents="ping")
-
-            st.session_state["model_identity"]=m
-
+            genai_client.models.generate_content(model=m, contents="ping")
+            st.session_state["model_identity"] = m
             return m
+        except: continue
+    return "gemini-1.5-flash"
 
-        except:
-            continue
-
-    return MODEL_CANDIDATES[0]
-
-
-# =========================================================
-# 5) MODEL CALL
-# =========================================================
+def extract_json_safely(text):
+    if not text: return None
+    text = re.sub(r"```json\s*|```", "", text).strip()
+    start, end = text.find('{'), text.rfind('}')
+    if start != -1 and end != -1:
+        try: return json.loads(text[start:end+1])
+        except: return None
+    return None
 
 def analyze_identity(identity, goal, samples, image_part):
-
-    prompt = f"""
-Analyze digital identity.
-
-Identity:
-{identity}
-
-Goal:
-{goal}
-
-Content samples:
-{samples}
-
-Return JSON:
-
-ConsistencyMatrix
-ObservedIdentitySummary
-StrategicAdjustments
-"""
-
-    schema = {
-        "type": "OBJECT",
-        "properties": {
-
-            "ConsistencyMatrix": {
-                "type": "OBJECT",
-                "properties": {
-                    "Textual_Identity_Score": {"type": "STRING"},
-                    "Textual_Goal_Score": {"type": "STRING"},
-                    "Visual_Identity_Score": {"type": "STRING"},
-                    "Visual_Goal_Score": {"type": "STRING"}
-                }
-            },
-
-            "ObservedIdentitySummary": {"type": "STRING"},
-            "StrategicAdjustments": {"type": "STRING"}
-        }
-    }
-
+    prompt = f"Analyze identity. Declared: {identity}. Goal: {goal}. Content: {samples}. Return JSON with ConsistencyMatrix, ObservedIdentitySummary, StrategicAdjustments."
+    
     config = g_types.GenerateContentConfig(
-        system_instruction="You are a digital identity strategist",
-        response_mime_type="application/json",
-        response_schema=schema,
-        temperature=0.4,
-        max_output_tokens=900
+        system_instruction="You are a professional strategist. Always respond in valid JSON.",
+        temperature=0.1,
+        max_output_tokens=1500
     )
 
-    contents = [image_part, g_types.Part(text=prompt)]
-
-    last_error = None
-
     for attempt in range(MAX_RETRIES):
-
         try:
-
-            response = genai_client.models.generate_content(
-                model=get_model(),
-                contents=contents,
-                config=config
-            )
-
-            raw = getattr(response, "text", "")
-
-            if not raw:
-                return {"error": "Empty response from model"}
-
-            raw = raw.strip()
-
-            # Remove markdown JSON
-            if raw.startswith("```"):
-                raw = raw.replace("```json", "").replace("```", "").strip()
-
-            try:
-
-                data = json.loads(raw)
-
-                if not isinstance(data, dict):
-                    return {"error": "Model returned non-dictionary JSON"}
-
-                return data
-
-            except json.JSONDecodeError:
-
-                return {
-                    "error": "Model returned invalid JSON",
-                    "raw_response": raw[:500]
-                }
-
-        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
-
-            last_error = str(e)
-
-            time.sleep(INITIAL_DELAY * (attempt + 1))
-
-        except Exception as e:
-
-            return {"error": str(e)}
-
-    return {"error": last_error or "Model failed"}
+            response = genai_client.models.generate_content(model=get_model(), contents=[image_part, g_types.Part(text=prompt)], config=config)
+            data = extract_json_safely(response.text)
+            if data: return data
+        except: time.sleep(INITIAL_DELAY * (attempt + 1))
+    return {"error": "Analysis failed."}
 
 # =========================================================
-# 6) UI
+# 5) MAIN UI
 # =========================================================
 
 st.title(TXT["title"])
 st.caption(TXT["sub"])
 
-samples=st.text_area(TXT["samples"],height=200)
-
-col1,col2=st.columns(2)
-
-with col1:
-    identity=st.text_area(TXT["identity"],height=120)
-
-with col2:
-    goal=st.text_area(TXT["goal"],height=120)
-
-image=st.file_uploader(TXT["upload"],type=["png","jpg","jpeg"])
-
-
-# =========================================================
-# 7) BUTTON
-# =========================================================
+samples = st.text_area(TXT["samples"], height=150)
+c1, c2 = st.columns(2)
+with c1: identity = st.text_area(TXT["identity"], height=100)
+with c2: goal = st.text_area(TXT["goal"], height=100)
+image = st.file_uploader(TXT["upload"], type=["png", "jpg", "jpeg"])
 
 if st.button(TXT["btn"]):
-
-    if not identity or not goal or not samples or not image:
-
+    if not all([identity, goal, samples, image]):
         st.warning(TXT["warn"])
-
-        st.stop()
-
-    hash_id=make_hash(identity,goal,samples)
-
-    cached=cache_get(hash_id)
-
-    if cached:
-
-        result=cached
-
     else:
-
-        img=g_types.Part.from_bytes(
-        data=image.getvalue(),
-        mime_type=image.type
-        )
-
-        with st.spinner(TXT["spinner"]):
-
-            result=analyze_identity(identity,goal,samples,img)
-
-        cache_set(hash_id,result)
-
-    if "error" in result:
-
-        st.error(result["error"])
-
-    else:
-
-        matrix=result["ConsistencyMatrix"]
-
-        st.markdown(f"### {TXT['matrix']}")
-
-        st.json(matrix)
-
-        st.markdown(f"### {TXT['summary']}")
-
-        st.write(result["ObservedIdentitySummary"])
-
-        st.markdown(f"### {TXT['strategy']}")
-
-        st.write(result["StrategicAdjustments"])
-
-
-# =========================================================
-# 8) FEEDBACK (UPDATED)
-# =========================================================
-
-st.divider()
-
-st.subheader(TXT["fb_title"])
-
-feedback_choice = st.radio(
-    TXT["fb_q"],
-    (TXT["fb_yes"], TXT["fb_no"]),
-    key=f"{APP_ID}_feedback_choice",
-)
-
-useful = (feedback_choice == TXT["fb_yes"])
-
-missing_reason = None
-if not useful:
-    missing_reason = st.text_input(
-        TXT["fb_missing"],
-        max_chars=200,
-        key=f"{APP_ID}_missing_reason",
-    )
-
-with st.expander(TXT["fb_exp"], expanded=False):
-
-    problem_text = st.text_area(
-        TXT["fb_p1"],
-        max_chars=280,
-        key=f"{APP_ID}_problem_text"
-    )
-
-    helpful_reason = st.text_area(
-        TXT["fb_p2"],
-        max_chars=280,
-        key=f"{APP_ID}_helpful_reason"
-    )
-
-    must_use_text = st.text_area(
-        TXT["fb_p3"],
-        max_chars=280,
-        key=f"{APP_ID}_must_use_text"
-    )
-
-    submit_feedback = st.button(
-        TXT["fb_btn"],
-        key=f"{APP_ID}_submit_feedback"
-    )
-
-    if submit_feedback:
-
-        has_any_text = any(
-            [
-                (missing_reason or "").strip(),
-                (problem_text or "").strip(),
-                (helpful_reason or "").strip(),
-                (must_use_text or "").strip(),
-            ]
-        )
-
-        if (not useful) and (not has_any_text):
-            st.warning(TXT["fb_warn"])
-
+        h = make_hash(identity, goal, samples)
+        res = cache_get(h)
+        if not res:
+            img = g_types.Part.from_bytes(data=image.getvalue(), mime_type=image.type)
+            with st.spinner(TXT["spinner"]):
+                res = analyze_identity(identity, goal, samples, img)
+            cache_set(h, res)
+        
+        if "error" in res:
+            st.error(res["error"])
         else:
-            try:
-
-                supabase.rpc(
-                    "submit_app_feedback",
-                    {
-                        "p_app_name": APP_ID,
-                        "p_useful": useful,
-                        "p_missing_reason": (missing_reason or "").strip() or None,
-                        "p_problem_text": (problem_text or "").strip() or None,
-                        "p_helpful_reason": (helpful_reason or "").strip() or None,
-                        "p_must_use_text": (must_use_text or "").strip() or None,
-                    },
-                ).execute()
-
-                st.success(TXT["fb_ok"])
-
-            except APIError as e:
-                try:
-                    st.json(e.args[0])
-                except:
-                    st.write(str(e))
-
-            except Exception as e:
-                st.exception(e)
-
+            st.markdown(f"### {TXT['matrix']}")
+            st.json(res.get("ConsistencyMatrix", {}))
+            st.markdown(f"### {TXT['summary']}")
+            st.write(res.get("ObservedIdentitySummary", ""))
+            st.markdown(f"### {TXT['strategy']}")
+            st.write(res.get("StrategicAdjustments", ""))
 
 # =========================================================
-# 9) FOOTER
+# 6) FOOTER
 # =========================================================
 
-st.markdown(
-"""
-<div style="text-align:center;margin-top:40px;font-size:12px;">
-© 2026 AI Product Builder - Layan Khalil
-</div>
-""",
-unsafe_allow_html=True
-)
+st.markdown('<div style="text-align:center;margin-top:50px;font-size:12px;">© 2026 Layan Khalil</div>', unsafe_allow_html=True)
