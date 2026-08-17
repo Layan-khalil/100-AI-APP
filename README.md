@@ -1,18 +1,18 @@
 # 🚀 50 AI Products
 
-**An ongoing experiment in building, shipping, and learning from AI-powered products.**
+**An ongoing experiment in finding problems, building solutions, sharing them publicly, and learning in the open.**
 
 This repository documents an ongoing challenge to build and ship **50 AI-powered products**.
 
-It originally started as a **50-day challenge** — one product per day — but evolved into an ongoing product-building experiment focused on **problem discovery, rapid execution, real-world testing, and continuous learning**.
+It originally started as a **50-day challenge** — one product per day — but evolved into an ongoing product-building experiment focused on **problem discovery, rapid execution, public experimentation, and continuous learning**.
 
 The goal is no longer simply to complete a number within a deadline.
 
 It is to develop the ability to repeatedly move from:
 
-**Problem → Idea → Product → Implementation → Feedback → Learning**
+**Problem → Idea → Solution → Product → Feedback → Learning**
 
-> **Build fast. Ship early. Learn continuously.**
+> **Find problems. Build solutions. Ship publicly. Learn continuously.**
 
 ---
 
@@ -20,7 +20,7 @@ It is to develop the ability to repeatedly move from:
 
 AI makes it easier than ever to build software.
 
-But having access to powerful AI models is not the same as knowing **what to build, why to build it, and how to turn an idea into something people can actually use.**
+But having access to powerful AI models is not the same as knowing **what to build, why to build it, and how to turn a real problem into something people can actually use.**
 
 This challenge is an experiment in developing those skills.
 
@@ -30,9 +30,10 @@ Each product is an opportunity to practice:
 * Turning observations into product ideas
 * Designing useful AI workflows
 * Making product and engineering decisions
-* Building under time constraints
+* Building under constraints
 * Shipping instead of endlessly polishing
-* Observing how people interact with a product
+* Sharing what I build publicly
+* Getting feedback from real people
 * Learning from what works — and what doesn't
 * Iterating based on what I discover
 
@@ -56,25 +57,70 @@ The original 50-day challenge gave that habit a structure.
 
 Although the products were not ultimately built across 50 consecutive days, the core idea remained valuable — and the challenge evolved into a **long-term product experimentation process**.
 
-The mindset is simple:
+### From Problem to Public Experiment
 
-**Notice → Question → Build → Ship → Observe → Learn → Iterate**
+The process is simple:
 
-I believe building is one of the fastest ways to learn.
+**Notice → Question → Build → Share → Observe → Learn → Iterate**
 
-Rather than spending months trying to make one idea perfect before putting it in front of users, I prefer to create focused experiments, get them into the real world, and learn from what happens.
+When I find a problem worth exploring, I try to build a solution for it and put it in front of people.
 
-Some ideas may become useful products.
+Instead of waiting until everything is perfect, I believe there is value in **building in public** — sharing the process, exposing ideas to real feedback, and allowing the product to evolve based on what I learn.
 
-Some may fail.
+The goal is not to pretend every experiment is a polished startup.
 
-Some may reveal a completely different problem worth solving.
+The goal is to show the journey from:
 
-All of them are valuable experiments.
+**"I noticed a problem."**
 
-The objective is not to prove that every idea is a winner.
+to
 
-The objective is to become better at **seeing problems, recognizing opportunities, building solutions, and evaluating them in the real world.**
+**"I built something to solve it."**
+
+to
+
+**"I shared it and learned what happened."**
+
+---
+
+## 🌍 Building in Public
+
+This challenge is also an experiment in **building in public**.
+
+Whenever possible, I share the products, ideas, experiments, and lessons behind them rather than keeping the entire process private.
+
+Public building creates an additional feedback loop:
+
+```text
+Problem
+   ↓
+Idea
+   ↓
+Build
+   ↓
+Share Publicly
+   ↓
+Real People
+   ↓
+Feedback
+   ↓
+Learn
+   ↓
+Improve
+```
+
+The purpose of sharing is not simply visibility.
+
+It is to create opportunities for:
+
+* Feedback
+* New perspectives
+* Validation
+* Collaboration
+* Unexpected use cases
+* Better product decisions
+
+A product can teach me something even if it never becomes a business.
 
 ---
 
@@ -98,7 +144,7 @@ Depending on the problem, a product may involve:
 * Full-stack web applications
 * Decision-support systems
 
-The technology is selected based on the problem and the desired outcome — rather than choosing a technology first and looking for a use case afterward.
+The technology is selected based on the problem and desired outcome — rather than choosing a technology first and looking for a use case afterward.
 
 ---
 
@@ -108,7 +154,7 @@ The technology is selected based on the problem and the desired outcome — rath
 
 🚀 **The challenge is ongoing.**
 
-The number will continue to grow as new products are built, tested, and documented.
+The number will continue to grow as new products are built, tested, shared, and documented.
 
 | Progress     | Status         |
 | ------------ | -------------- |
@@ -138,6 +184,8 @@ Build
    ↓
 Ship
    ↓
+Share
+   ↓
 Observe
    ↓
 Learn
@@ -163,7 +211,9 @@ Throughout this challenge, I am exploring questions such as:
 * How quickly can an idea become a usable product?
 * What makes an AI product useful beyond simply generating text?
 * Which experiments reveal opportunities worth pursuing further?
-* What can I learn about users and product behavior by shipping quickly?
+* What can I learn from sharing products with real people?
+* How does public feedback change product decisions?
+* Which ideas deserve deeper investment?
 
 The repository therefore acts as a **continuous AI product experimentation lab**.
 
@@ -240,10 +290,12 @@ The number is not the finish line.
 
 The real objective is to build the habit of:
 
-**Turning observations into ideas.
-Turning ideas into products.
-Turning products into learning.**
+**Finding problems.
+Building solutions.
+Sharing them publicly.
+Learning from real people.
+Getting better with every iteration.**
 
-> **See a problem. Think about the solution. Build it. Ship it. Learn from it.**
+> **See a problem. Think about the solution. Build it. Share it. Learn from it.**
 
 **The challenge continues. 🚀**
